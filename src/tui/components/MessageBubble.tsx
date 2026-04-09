@@ -61,5 +61,18 @@ export function MessageBubble({ message }: Props) {
     );
   }
 
+  if (message.role === 'system') {
+    return (
+      <Box flexDirection="row" marginTop={1}>
+        <Box marginRight={1} width={4}>
+          <Text color="red" bold>SYS </Text>
+        </Box>
+        <Box flexShrink={1}>
+          <Text color="red">{message.content}</Text>
+        </Box>
+      </Box>
+    );
+  }
+
   return null;
 }

@@ -9,7 +9,7 @@ import { SessionMessage } from '../../session/types.js';
 import { GemmaEngine } from '../../core/inference.js';
 import { loadConfig } from '../../config/settings.js';
 
-export function ChatView() {
+export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }) {
   const { exit } = useApp();
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -42,7 +42,15 @@ export function ChatView() {
 
   const handleCommand = (cmd: string) => {
     clearInput();
-    setMessages(prevMessages => [...prevMessages, { role: 'user', content: `Executed ${cmd}`, timestamp: new Date().toISOString() }]);
+    if (cmd === '/exit') {
+      exit();
+      return;
+    }
+    if (cmd === '/model') {
+      if (onNavigate) onNavigate('onboarding');
+      return;
+    }
+    setMessages(prevMessages => [...prevMessages, { role: 'system', content: `Command ${cmd} is not fully implemented yet in this preview.`, timestamp: new Date().toISOString() }]);
   };
 
   const handleSubmit = async (val: string) => {

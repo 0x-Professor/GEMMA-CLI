@@ -30,5 +30,4 @@ export function App() {
     );
   }
 
-  return <ChatView />;
-}
+  return <ChatView onNavigate={(dest) => setView(dest as any)} />;}

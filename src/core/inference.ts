@@ -17,7 +17,7 @@ export class GemmaEngine {
     const config = GEMMA_MODELS[modelId as ModelId];
     if (!config) throw new Error(`Unknown model: ${modelId}`);
 
-    const baseDir = process.env.GEMMA_HOME || path.join('U:', 'gemma-cli') || path.join(os.homedir(), '.gemma-cli');
+    const baseDir = process.env.GEMMA_HOME || path.join(os.homedir(), '.gemma-cli');
     const modelPath = path.join(baseDir, 'models', config.filename);
 
     this.llama = await getLlama({ gpu: gpuMode, progressLogs: false, build: 'never' });
