@@ -20,8 +20,8 @@ export class GemmaEngine {
     const baseDir = process.env.GEMMA_HOME || path.join('U:', 'gemma-cli') || path.join(os.homedir(), '.gemma-cli');
     const modelPath = path.join(baseDir, 'models', config.filename);
 
-    this.llama = await getLlama({ gpu: gpuMode });
-    
+    this.llama = await getLlama({ gpu: gpuMode, progressLogs: false, build: 'never' });
+
     this.model = await this.llama.loadModel({ modelPath });
     this.ctx = await this.model.createContext({ contextSize: Math.min(config.contextLength, 8192) });
     const seq = this.ctx.getSequence();

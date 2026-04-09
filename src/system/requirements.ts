@@ -1,5 +1,6 @@
 import si from 'systeminformation';
 import os from 'os';
+import { execSync } from 'child_process';
 import { GEMMA_MODELS, ModelId } from '../utils/constants.js';
 
 export interface SystemInfo {
@@ -16,7 +17,14 @@ export async function detectGpu(): Promise<'metal' | 'cuda' | false> {
   const graphics = await si.graphics();
   const hasNvidia = graphics.controllers.some(c => (/nvidia/i).test(c.vendor || c.name || ''));
   if (hasNvidia) {
-    return 'cuda';
+    try {
+      // Check if nvcc is available to prevent node-llama-cpp compilation spam
+      execSync('nvcc --version', { stdio: 'ignore' });
+      return 'cuda';
+    } catch {
+      // Missing nvcc (CUDA Toolkit not found), fallback to CPU to avoid noisy CMake errors
+      return false;
+    }
   }
   return false;
 }

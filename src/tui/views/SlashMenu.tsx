@@ -1,6 +1,5 @@
-import React from 'react';
-import { Box, Text } from 'ink';
-import { Select } from '@inkjs/ui';
+import React, { useState, useEffect } from 'react';
+import { Box, Text, useInput } from 'ink';
 
 interface Props {
   query: string;
@@ -9,6 +8,8 @@ interface Props {
 }
 
 export function SlashMenu({ query, onSelect, onClose }: Props) {
+  const [index, setIndex] = useState(0);
+
   const allCommands = [
     { label: '/model - Switch or download model', value: '/model' },
     { label: '/mcp - Manage MCP servers', value: '/mcp' },
@@ -21,15 +22,37 @@ export function SlashMenu({ query, onSelect, onClose }: Props) {
 
   const filtered = allCommands.filter(c => c.value.startsWith(`/${query}`));
 
+  useEffect(() => {
+    setIndex(0); // reset selection when typing
+  }, [query]);
+
+  // Safely grab key events manually to avoid competing with TextInput focus
+  useInput((input, key) => {
+    if (filtered.length === 0) return;
+
+    if (key.upArrow) {
+      setIndex((i) => (i > 0 ? i - 1 : filtered.length - 1));
+    } else if (key.downArrow) {
+      setIndex((i) => (i < filtered.length - 1 ? i + 1 : 0));
+    } else if (key.return) {
+      onSelect(filtered[index]?.value || '');
+      onClose();
+    } else if (key.escape) {
+      onClose();
+    }
+  });
+
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1}>
-      <Select
-        options={filtered.length > 0 ? filtered : [{ label: 'No commands found', value: '' }]}
-        onChange={(value) => {
-          if (value) onSelect(value);
-          onClose();
-        }}
-      />
+    <Box flexDirection="column" borderStyle="round" paddingX={1} borderColor="cyan">
+      {filtered.length === 0 ? (
+         <Text color="gray">No commands found</Text>
+      ) : (
+        filtered.map((item, i) => (
+          <Text key={item.value} color={i === index ? 'green' : 'white'} bold={i === index}>
+            {i === index ? '> ' : '  '}{item.label}
+          </Text>
+        ))
+      )}
     </Box>
   );
 }

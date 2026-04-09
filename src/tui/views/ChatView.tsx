@@ -46,7 +46,7 @@ export function ChatView() {
   };
 
   const handleSubmit = async (val: string) => {
-    if (!val.trim() || isInferencing) return;
+    if (!val.trim() || isInferencing || showSlash) return;
     if (!engine) {
       setMessages([...messages, { role: 'system', content: '⏳ Please wait, the engine is still loading...', timestamp: new Date().toISOString() }]);
       clearInput();

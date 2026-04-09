@@ -3,63 +3,56 @@ import got from 'got';
 import crypto from 'crypto';
 import path from 'path';
 import os from 'os';
-import cliProgress from 'cli-progress';
 import { GEMMA_MODELS, HF_RESOLVE, ModelId } from '../utils/constants.js';
 
-export async function downloadModel(modelId: ModelId): Promise<void> {
+export async function downloadModel(modelId: ModelId, onProgress?: (downloaded: number, total: number) => void): Promise<void> {
   const modelInfo = GEMMA_MODELS[modelId];
   const url = HF_RESOLVE(modelInfo.repo, modelInfo.filename);
-  
-  const modelsDir = path.join(os.homedir(), '.gemma-cli', 'models');
+
+  const modelsDir = path.join(process.env.GEMMA_HOME || path.join(os.homedir(), '.gemma-cli'), 'models');
   await fs.ensureDir(modelsDir);
   const destination = path.join(modelsDir, modelInfo.filename);
-  
+
   let downloadedBytes = 0;
+  let totalBytes = 0;
   if (await fs.pathExists(destination)) {
     const stat = await fs.stat(destination);
     downloadedBytes = stat.size;
   }
-  
+
   const options: Record<string, any> = {
     headers: {
       ...(process.env.GEMMA_HF_TOKEN ? { Authorization: `Bearer ${process.env.GEMMA_HF_TOKEN}` } : {})
     },
     isStream: true
   };
-  
+
   if (downloadedBytes > 0) {
     options.headers = {
       ...options.headers,
       Range: `bytes=${downloadedBytes}-`
     };
   }
-  
+
   return new Promise((resolve, reject) => {
-    const downloadStream = got.stream(url, options as any); // using any for stream due to got typings
-    
-    // Type definitions for cli-progress are perfectly capable
-    const bar = new cliProgress.SingleBar({
-      format: `Downloading ${modelInfo.displayName} | {bar} | {percentage}% | {value}/{total} bytes`,
-    }, cliProgress.Presets.shades_classic);
-    
+    const downloadStream = got.stream(url, options as any);
+
     downloadStream.on('response', (response : any) => {
-      if (response.statusCode === 206) { // Partial Content
-        const total = parseInt(response.headers['content-range']?.split('/')[1] || '0', 10);
-        bar.start(total, downloadedBytes);
+      if (response.statusCode === 206) {
+        totalBytes = parseInt(response.headers['content-range']?.split('/')[1] || '0', 10);
       } else {
-        const total = parseInt(response.headers['content-length'] || '0', 10);
-        bar.start(total, 0);
+        totalBytes = parseInt(response.headers['content-length'] || '0', 10);
         downloadedBytes = 0; // Fresh download
       }
+      if (onProgress) onProgress(downloadedBytes, totalBytes);
     });
-    
+
     downloadStream.on('data', (chunk: Buffer) => {
       downloadedBytes += chunk.length;
-      bar.update(downloadedBytes);
+      if (onProgress) onProgress(downloadedBytes, totalBytes);
     });
-    
+
     downloadStream.on('end', async () => {
-      bar.stop();
       try {
         await verifyChecksum(destination, modelInfo.sha256);
         resolve();
@@ -67,12 +60,11 @@ export async function downloadModel(modelId: ModelId): Promise<void> {
         reject(err);
       }
     });
-    
+
     downloadStream.on('error', (err: any) => {
-      bar.stop();
       reject(err);
     });
-    
+
     const fileStream = fs.createWriteStream(destination, { flags: downloadedBytes > 0 ? 'a' : 'w' });
     downloadStream.pipe(fileStream);
   });

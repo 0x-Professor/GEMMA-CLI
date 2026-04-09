@@ -12,14 +12,20 @@ interface Props {
 
 export function OnboardingView({ onComplete }: Props) {
   const [sys, setSys] = useState<SystemInfo | null>(null);
-  const [downloading, setDownloading] = useState<{ active: boolean; modelId?: ModelId }>({ active: false });
+  const [downloading, setDownloading] = useState<{ active: boolean; modelId?: ModelId; loaded: number; total: number }>({ active: false, loaded: 0, total: 100 });
 
   useEffect(() => {
     getSystemInfo().then(setSys);
   }, []);
 
   if (downloading.active && downloading.modelId) {
-    return <Text color="yellow">Downloading {downloading.modelId}... this may take a while. Progress bar writes directly to terminal.</Text>;
+    const percent = downloading.total > 0 ? ((downloading.loaded / downloading.total) * 100).toFixed(1) : 0;
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text color="yellow">Downloading {downloading.modelId}...</Text>
+        <Text>Progress: {percent}% ({(downloading.loaded / 1024 / 1024).toFixed(1)} MB / {(downloading.total / 1024 / 1024).toFixed(1)} MB)</Text>
+      </Box>
+    );
   }
 
   if (!sys) {
@@ -29,13 +35,15 @@ export function OnboardingView({ onComplete }: Props) {
   const compat = checkModelCompat(sys);
 
   const handleSelect = async (modelId: string) => {
-    setDownloading({ active: true, modelId: modelId as ModelId });
+    setDownloading({ active: true, modelId: modelId as ModelId, loaded: 0, total: 100 });
     try {
-      await downloadModel(modelId as ModelId);
+      await downloadModel(modelId as ModelId, (loaded, total) => {
+        setDownloading({ active: true, modelId: modelId as ModelId, loaded, total });
+      });
       updateConfig({ model: modelId });
       onComplete();
     } catch (err: any) {
-      setDownloading({ active: false });
+      setDownloading({ active: false, loaded: 0, total: 100 });
       console.error(err);
     }
   };
