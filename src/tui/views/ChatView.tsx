@@ -47,7 +47,12 @@ export function ChatView() {
 
   const handleSubmit = async (val: string) => {
     if (!val.trim() || isInferencing) return;
-    
+    if (!engine) {
+      setMessages([...messages, { role: 'system', content: '⏳ Please wait, the engine is still loading...', timestamp: new Date().toISOString() }]);
+      clearInput();
+      return;
+    }
+
     const userMsg: SessionMessage = { role: 'user', content: val, timestamp: new Date().toISOString() };
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
@@ -84,6 +89,11 @@ export function ChatView() {
         {isInferencing && currentResponse && (
           <MessageBubble message={{ role: 'assistant', content: currentResponse, timestamp: new Date().toISOString() }} />
         )}
+        {!engine && messages.filter(m => m.role === 'system').length === 0 && (
+          <Box padding={1}>
+            <Text color="yellow">⏳ Booting Local Inference Engine (may compile binaries on first launch)...</Text>
+          </Box>
+        )}
       </Box>
 
       <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -91,6 +101,7 @@ export function ChatView() {
           <Text>&gt; </Text>
           <TextInput
             key={inputKey}
+            placeholder={!engine ? "Waiting for engine to load..." : "Type your message..."}
             onChange={(val) => {
               setInput(val);
               if (val.startsWith('/')) setShowSlash(true);
