@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Text, useInput, useApp } from 'ink';
+import { Box, Text, useInput, useApp, Static } from 'ink';
 import { TextInput } from '@inkjs/ui';
+import Spinner from 'ink-spinner';
 import { Banner } from '../components/Banner.js';
 import { MessageBubble } from '../components/MessageBubble.js';
 import { StatusBar } from '../components/StatusBar.js';
@@ -87,36 +88,45 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
   };
 
   return (
-    <Box flexDirection="column" height="100%">
+    <Box flexDirection="column" width="100%">
       {messages.length === 0 && <Banner />}
 
-      <Box flexGrow={1} flexDirection="column" overflowY="hidden">
-        {messages.map((msg, i) => (
-          <MessageBubble key={i} message={msg} />
-        ))}
+      <Static items={messages}>
+        {(msg, i) => (
+          <MessageBubble key={`${i}-${msg.timestamp}`} message={msg} />
+        )}
+      </Static>
+
+      <Box flexDirection="column">
         {isInferencing && currentResponse && (
           <MessageBubble message={{ role: 'assistant', content: currentResponse, timestamp: new Date().toISOString() }} />
         )}
-        {!engine && messages.filter(m => m.role === 'system').length === 0 && (
-          <Box padding={1}>
-            <Text color="yellow">⏳ Booting Local Inference Engine (may compile binaries on first launch)...</Text>
+        {!engine && messages.filter(m => m.role === 'system').length === 0 && ( 
+          <Box padding={1} flexDirection="row">
+            <Text color="yellow">
+              <Spinner type="dots" /> Booting Local Inference Engine (may compile binaries on first launch)...
+            </Text>
           </Box>
         )}
       </Box>
 
-      <Box borderStyle="round" paddingX={1} flexDirection="column">
+      <Box borderStyle="round" paddingX={1} flexDirection="column" marginTop={1}>
         <Box flexDirection="row">
-          <Text>&gt; </Text>
-          <TextInput
-            key={inputKey}
-            placeholder={!engine ? "Waiting for engine to load..." : "Type your message..."}
-            onChange={(val) => {
-              setInput(val);
-              if (val.startsWith('/')) setShowSlash(true);
-              else setShowSlash(false);
-            }}
-            onSubmit={handleSubmit}
-          />
+          <Text color="cyan" bold>&gt; </Text>
+          {isInferencing ? (
+            <Text dimColor>Gemma is thinking...</Text>
+          ) : (
+            <TextInput
+              key={inputKey}
+              placeholder={!engine ? "Waiting for engine to load..." : "Type your message..."}
+              onChange={(val) => {
+                setInput(val);
+                if (val.startsWith('/')) setShowSlash(true);
+                else setShowSlash(false);
+              }}
+              onSubmit={handleSubmit}
+            />
+          )}
         </Box>
       </Box>
 

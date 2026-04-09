@@ -12,10 +12,10 @@ export function MessageBubble({ message }: Props) {
     return (
       <Box flexDirection="row" marginTop={1}>
         <Box marginRight={1} width={4}>
-          <Text color="blue" bold>You </Text>
+          <Text color="cyan" bold>You </Text>
         </Box>
         <Box flexShrink={1}>
-          <Text>{message.content}</Text>
+          <Text bold>{message.content}</Text>
         </Box>
       </Box>
     );
