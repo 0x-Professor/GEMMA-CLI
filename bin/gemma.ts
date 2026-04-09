@@ -1,7 +1,9 @@
-#!/usr/env/bin node
+#!/usr/bin/env node
 import { Command } from 'commander';
+import { GemmaApp } from '../src/index.js';
 
 const program = new Command();
+const app = new GemmaApp();
 
 program
   .name('gemma')
@@ -12,22 +14,21 @@ program
   .command('chat')
   .description('Start the Gemma CLI chat agent')
   .action(async () => {
-    throw new Error('not implemented');
+    await app.chat();
   });
 
 program
   .command('doctor')
   .description('Check system compatibility for Gemma models')
   .action(async () => {
-    const { runDoctor } = await import('../src/system/requirements.js');
-    console.log(await runDoctor());
+    await app.doctor();
   });
 
 program
   .command('resume')
   .description('Resume most recent chat session')
   .action(async () => {
-    throw new Error('not implemented');
+    await app.resume();
   });
 
 program
@@ -35,7 +36,7 @@ program
   .argument('<id>', 'Session ID prefix')
   .description('Load session by IDs')
   .action(async (id: string) => {
-    throw new Error('not implemented');
+    await app.session(id);
   });
 
 program.parseAsync().catch((err) => {
