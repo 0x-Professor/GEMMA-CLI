@@ -54,7 +54,7 @@ export class GemmaEngine {
       topK: 64,
       topP: 0.95,
       minP: 0.0,
-      repeatPenalty: 1.0
+      repeatPenalty: { penalty: 1.0 }
     });
 
     const elapsed = (Date.now() - startTime) / 1000;
