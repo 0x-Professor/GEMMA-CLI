@@ -13,20 +13,41 @@ export class GemmaEngine {
   private tokensPerSec: number = 0;
 
   async loadModel(modelId: string): Promise<void> {
-    const gpuMode = await detectGpu();
     const config = GEMMA_MODELS[modelId as ModelId];
     if (!config) throw new Error(`Unknown model: ${modelId}`);
 
     const baseDir = process.env.GEMMA_HOME || path.join(os.homedir(), '.gemma-cli');
     const modelPath = path.join(baseDir, 'models', config.filename);
 
-    this.llama = await getLlama({ gpu: gpuMode, progressLogs: false, build: 'never' });
+    const fs = await import('fs/promises');
+    try {
+      await fs.access(modelPath);
+    } catch {
+      throw new Error(`Model file not found. Please run '/model' to download it first.`);
+    }
 
-    this.model = await this.llama.loadModel({ modelPath });
-    this.ctx = await this.model.createContext({ contextSize: Math.min(config.contextLength, 8192) });
-    const seq = this.ctx.getSequence();
-    
-    this.session = new LlamaChatSession({ contextSequence: seq });
+    // Suppress noisy node-llama-cpp fallback warnings that break the TUI
+    const cw = console.warn;
+    const ce = console.error;
+    const cl = console.log;
+    console.warn = () => {};
+    console.error = () => {};
+    console.log = () => {};
+
+    try {
+      // Use 'auto' to let node-llama-cpp automatically locate a prebuilt binary
+      // for the appropriate GPU or fallback to CPU seamlessly avoiding build crashes
+      this.llama = await getLlama({ gpu: 'auto', progressLogs: false, build: 'never' });
+      this.model = await this.llama.loadModel({ modelPath });
+      this.ctx = await this.model.createContext({ contextSize: Math.min(config.contextLength, 8192) });
+      const seq = this.ctx.getSequence();
+
+      this.session = new LlamaChatSession({ contextSequence: seq });
+    } finally {
+      console.warn = cw;
+      console.error = ce;
+      console.log = cl;
+    }
   }
 
   async *streamChat(
