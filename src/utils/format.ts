@@ -36,5 +36,5 @@ export function highlightTokens(code: string, language?: string): string {
   if (language && highlight.supportsLanguage(language)) {
     return highlight.highlight(code, { language });
   }
-  return highlight.highlightAuto(code);
+  return highlight.highlight(code);
 }
