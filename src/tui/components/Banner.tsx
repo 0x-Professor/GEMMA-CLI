@@ -8,7 +8,7 @@ export function Banner() {
       <Text color="cyan" bold> / _` |/ _ \ '_ ` _ \| '_ ` _ \ / _` |</Text>
       <Text color="cyan" bold>| (_| |  __/ | | | | | | | | | | (_| |</Text>
       <Text color="cyan" bold> \__, |\___|_| |_| |_|_| |_| |_|\__,_|</Text>
-      <Text color="cyan" bold>  __/ |   CLI powered by Google Gemma</Text>
+      <Text color="cyan" bold>  __/ |   CLI powered by Google Gemma (Unofficial Implementation)</Text>
       <Text color="cyan" bold> |___/ </Text>
     </Box>
   );

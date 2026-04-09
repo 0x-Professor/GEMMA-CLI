@@ -89,12 +89,11 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
 
   return (
     <Box flexDirection="column" width="100%">
-      {messages.length === 0 && <Banner />}
-
-      <Static items={messages}>
-        {(msg, i) => (
-          <MessageBubble key={`${i}-${msg.timestamp}`} message={msg} />
-        )}
+      <Static items={[{ isBanner: true, id: 'banner' }, ...messages.map((m, i) => ({ ...m, isBanner: false, id: `msg-${i}-${m.timestamp}` }))]}>
+        {(item: any) => {
+          if (item.isBanner) return <Banner key={item.id} />;
+          return <MessageBubble key={item.id} message={item} />;
+        }}
       </Static>
 
       <Box flexDirection="column">
@@ -110,26 +109,6 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
         )}
       </Box>
 
-      <Box borderStyle="round" paddingX={1} flexDirection="column" marginTop={1}>
-        <Box flexDirection="row">
-          <Text color="cyan" bold>&gt; </Text>
-          {isInferencing ? (
-            <Text dimColor>Gemma is thinking...</Text>
-          ) : (
-            <TextInput
-              key={inputKey}
-              placeholder={!engine ? "Waiting for engine to load..." : "Type your message..."}
-              onChange={(val) => {
-                setInput(val);
-                if (val.startsWith('/')) setShowSlash(true);
-                else setShowSlash(false);
-              }}
-              onSubmit={handleSubmit}
-            />
-          )}
-        </Box>
-      </Box>
-
       {showSlash && (
         <Box marginBottom={1}>
           <SlashMenu
@@ -139,6 +118,24 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
           />
         </Box>
       )}
+
+      <Box flexDirection="row" paddingY={1}>
+        <Text color="cyan" bold>❯ </Text>
+        {isInferencing ? (
+          <Text dimColor>Gemma is thinking...</Text>
+        ) : (
+          <TextInput
+            key={inputKey}
+            placeholder={!engine ? "Waiting for engine to load..." : "Type your message..."}
+            onChange={(val) => {
+              setInput(val);
+              if (val.startsWith('/')) setShowSlash(true);
+              else setShowSlash(false);
+            }}
+            onSubmit={handleSubmit}
+          />
+        )}
+      </Box>
 
       <StatusBar
          modelId={config.model}

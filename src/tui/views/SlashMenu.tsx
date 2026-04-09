@@ -43,13 +43,13 @@ export function SlashMenu({ query, onSelect, onClose }: Props) {
   });
 
   return (
-    <Box flexDirection="column" borderStyle="round" paddingX={1} borderColor="cyan">
+    <Box flexDirection="column" paddingX={1} borderStyle="single" borderColor="cyan">
       {filtered.length === 0 ? (
          <Text color="gray">No commands found</Text>
       ) : (
         filtered.map((item, i) => (
-          <Text key={item.value} color={i === index ? 'green' : 'white'} bold={i === index}>
-            {i === index ? '> ' : '  '}{item.label}
+          <Text key={item.value} color={i === index ? 'cyan' : 'gray'} bold={i === index}>
+            {i === index ? '❯ ' : '  '}{item.label}
           </Text>
         ))
       )}
