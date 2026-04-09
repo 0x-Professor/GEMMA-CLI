@@ -32,10 +32,19 @@ export class MCPClientWrapper {
     try {
       if (this.config.transport === 'stdio') {
         if (!this.config.command) throw new Error('Command required for stdio transport');
+        const mergedEnv: Record<string, string> = {};
+        for (const [k, v] of Object.entries(process.env)) {
+           if (v !== undefined) mergedEnv[k] = v;
+        }
+        if (this.config.env) {
+           for (const [k, v] of Object.entries(this.config.env)) {
+             mergedEnv[k] = v;
+           }
+        }
         const transport = new StdioClientTransport({
           command: this.config.command,
           args: this.config.args || [],
-          env: this.config.env ? { ...process.env, ...this.config.env } : { ...process.env },
+          env: mergedEnv,
         });
         await this.client.connect(transport);
         transport.onclose = () => { this.handleDisconnect().catch(e => logger.error(`Disconnect handling failed: ${String(e)}`)); };
