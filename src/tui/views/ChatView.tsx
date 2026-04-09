@@ -42,7 +42,7 @@ export function ChatView() {
 
   const handleCommand = (cmd: string) => {
     clearInput();
-    setMessages([...messages, { role: 'user', content: `Executed ${cmd}`, timestamp: new Date().toISOString() }]);
+    setMessages(prevMessages => [...prevMessages, { role: 'user', content: `Executed ${cmd}`, timestamp: new Date().toISOString() }]);
   };
 
   const handleSubmit = async (val: string) => {
