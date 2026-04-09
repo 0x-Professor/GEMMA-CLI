@@ -19,7 +19,8 @@ program
   .command('doctor')
   .description('Check system compatibility for Gemma models')
   .action(async () => {
-    throw new Error('not implemented');
+    const { runDoctor } = await import('../src/system/requirements.js');
+    console.log(await runDoctor());
   });
 
 program
