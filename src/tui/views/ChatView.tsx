@@ -136,7 +136,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
   };
 
   const shouldForceWebSearch = (userText: string): boolean => {
-    return /(search\s+the\s+web|web\s+search|latest\s+news|look\s+up|find\s+online)/i.test(userText);
+    return /(search\s+the\s+web|web\s+search|latest\s+news|look\s+up|find\s+online|\bheadlines?\b|\bnews\b|\btrends?\b)/i.test(userText);
   };
 
   const looksLikeToolRefusal = (assistantText: string): boolean => {
@@ -194,7 +194,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     return query
       .trim()
       .replace(/^(ok|okay|please|can you|could you|would you)\s+/i, '')
-      .replace(/^(search\s+the\s+web\s+for|search\s+web\s+for|web\s+search\s+for|look\s+up|find\s+online)\s+/i, '')
+      .replace(/^(search\s+the\s+web(?:\s+for)?|search\s+web(?:\s+for)?|web\s+search(?:\s+for)?|look\s+up|find\s+online)\s+/i, '')
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -331,6 +331,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     const searchRuns: Array<{ aspect: string; query: string; provider: string; results: WebSearchResultItem[] }> = [];
 
     const runSingleSearch = async (aspect: string, q: string): Promise<void> => {
+      setCurrentResponse(`Searching ${aspect}...`);
       const searchArgs = { query: q, maxResults: 6, safeSearch: true };
       const { normalizedArgs: normalizedSearchArgs, resultText: searchResultText } = await executeToolByName('web-search', searchArgs);
 
@@ -403,6 +404,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
 
     const docs: Array<{ aspect: string; title: string; url: string; host: string; snippet: string; fetchType: string }> = [];
     for (const selected of selectedUrls) {
+      setCurrentResponse(`Fetching source: ${selected.title}`);
       const fetchArgs = { url: selected.url, maxChars: 9000, timeout: 9000 };
       const { normalizedArgs: normalizedFetchArgs, resultText: fetchResultText } = await executeToolByName('web-fetch', fetchArgs);
 
@@ -435,6 +437,8 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
         fetchType: fetchPayload?.type || 'content',
       });
     }
+
+    setCurrentResponse('');
 
     return {
       toolMessages,
