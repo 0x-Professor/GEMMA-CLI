@@ -70,8 +70,8 @@ ${ctx.anchorBlock}`);
   if (ctx.tools.length > 0) {
     const toolXml = ctx.tools.map(tool => `<tool name="${tool.name}">
   <description>${tool.description}</description>
-  <parameters>${JSON.stringify(tool.schema._def ?? {}, null, 2)}</parameters>
-</tool>`).join('\n');
+  <parameters>${JSON.stringify((tool.schema ?? tool.parameters)?._def ?? {}, null, 2)}</parameters>
+  </tool>`).join('\n');
 
     sections.push(`AVAILABLE TOOLS:
 To call a tool, emit EXACTLY this format and nothing else before the tool result:

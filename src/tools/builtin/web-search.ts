@@ -29,7 +29,7 @@ Good for: finding documentation, code examples, recent news, package info.`,
   category: 'web',
   riskLevel: 'low',
 
-  schema: z.object({
+  parameters: z.object({
     query: z.string().min(2).max(500)
       .describe('The search query. Be specific for better results.'),
     maxResults: z.number().int().min(1).max(25).default(10)

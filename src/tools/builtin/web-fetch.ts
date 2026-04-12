@@ -50,7 +50,7 @@ Max content returned: 50,000 characters.`,
   category: 'web',
   riskLevel: 'low',
 
-  schema: z.object({
+  parameters: z.object({
     url: z.string().url()
       .describe('Full URL to fetch (must include https://)'),
     maxChars: z.number().int().min(500).max(100_000).default(50_000)
@@ -160,26 +160,5 @@ Max content returned: 50,000 characters.`,
         note: `Content truncated at ${maxChars} chars. Full page is ${content.length} chars.`,
       }),
     };
-  },
-};import { z } from 'zod';
-import got from 'got';
-import { ToolDefinition } from '../types.js';
-
-export const webFetchTool: ToolDefinition<{ url: z.ZodString }> = {
-  name: 'web-fetch',
-  description: 'Fetch the text content of a URL',
-  parameters: z.object({
-    url: z.string().url().describe('The URL to fetch'),
-  }),
-  execute: async ({ url }) => {
-    try {
-      const response = await got(url);
-      return { result: response.body };
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        return { error: err.message };
-      }
-      return { error: 'Unknown error occurred while fetching URL' };
-    }
   },
 };
