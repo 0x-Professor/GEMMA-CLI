@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ToolDefinition, ToolResult } from '../types.js';
 import { SessionTodoStore } from '../../session/todo-store.js';
 
-export const todoWriteTool: ToolDefinition<{ action: z.ZodString; task: z.ZodOptional<z.ZodAny>; id: z.ZodOptional<z.ZodString>; updates: z.ZodOptional<z.ZodAny> }> = {
+export const todoWriteTool: ToolDefinition<{ action: z.ZodTypeAny; task: z.ZodOptional<z.ZodAny>; id: z.ZodOptional<z.ZodTypeAny>; updates: z.ZodOptional<z.ZodAny> }> = {
   name: 'todo-write',
   displayName: 'Write Todo',
   description: 'Manage the session task ledger (add, update, delete, clear task planning items)',

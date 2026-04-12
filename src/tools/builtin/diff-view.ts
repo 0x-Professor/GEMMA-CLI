@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { spawnSync } from 'child_process';
 import { ToolDefinition, ToolResult } from '../types.js';
 
-export const diffViewTool: ToolDefinition<{ type: z.ZodString; file1: z.ZodString; file2: z.ZodOptional<z.ZodString> }> = {
+export const diffViewTool: ToolDefinition<{ type: z.ZodTypeAny; file1: z.ZodTypeAny; file2: z.ZodOptional<z.ZodTypeAny> }> = {
   name: 'diff-view',
   displayName: 'Diff View',
   description: 'View changes between files or git tree',
