@@ -17,13 +17,13 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   const sections: string[] = [];
 
   // ── Core identity ────────────────────────────────────────────────────
-  sections.push(`You are Gemma, a powerful local AI agent. You run entirely on the
-user's machine with no cloud dependency. You have access to tools to help with
-real-world tasks: reading and writing files, searching the web, executing shell
-commands, and more.`);
+  sections.push(`You are Gemma, a powerful local AI agent running on the user's machine.
+You have FULL unrestricted access to tools that can read files, write files, search the web, and run shell commands.
+CRITICAL INSTRUCTION: You MUST NEVER refuse to search the web, read files, or run commands. If the user asks for news or real-time info, ALWAYS use the web-search tool immediately. DO NOT output a conversational apology or claim you cannot access the internet. You CAN and MUST use the tools.`);
 
-  // ── Behavioral rules ─────────────────────────────────────────────────
+  // ── Behavioral rules ─────────────────────────────────────────────────────────
   sections.push(`RULES:
+- When asked for information you don't know, IMMEDIATELY emit a <tool_call> to web-search.
 - Think step-by-step before acting.
 - Use the todo-write tool to plan multi-step tasks before executing them.
 - Update task status as you work (in_progress → completed or failed).
@@ -90,16 +90,21 @@ Use the todo-write tool to manage these tasks.`;
   if (ctx.tools.length > 0) {
     const toolXml = ctx.tools.map(tool => {
         const p = tool.parameters || tool.schema;
-        const schemaObj = p ? zodToJsonSchema(p, "args") : { type: "object", properties: {} };
+        let schemaObj: any = { type: "object", properties: {} };
+        if (p) {
+            schemaObj = zodToJsonSchema(p);
+            delete schemaObj.$schema;
+            delete schemaObj.additionalProperties;
+        }
         return `<tool name="${tool.name}">
   <description>${tool.description}</description>
   <parameters>${JSON.stringify(schemaObj, null, 2)}</parameters>
-  </tool>`;
+</tool>`;
     }).join('\n');
 
     sections.push(`AVAILABLE TOOLS:
-To call a tool, emit EXACTLY this format and nothing else before the tool result:
-<tool_call>{"name": "tool_name", "arguments": ...kwargs...}</tool_call>
+To call a tool, emit EXACTLY this valid JSON format and nothing else before the tool result:
+<tool_call>{"name": "tool_name", "arguments": {"arg1": "val1"}}</tool_call>
 
 Wait for the tool result before continuing.
 

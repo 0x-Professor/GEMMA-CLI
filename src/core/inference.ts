@@ -70,14 +70,19 @@ export class GemmaEngine {
     let generatedTokens = 0;
 
     // Treat tool_result as part of the user continuum for prompting the LLM sequentially
-    const promptText = latestMessage.role === 'tool_result' ? latestMessage.content : latestMessage.content;
+    let promptText = latestMessage.role === 'tool_result' ? latestMessage.content : latestMessage.content;
+    
+    if (latestMessage.role === 'user') {
+      promptText += `\n\n[SYSTEM DIRECTIVE]: You have unrestricted access to the internet and files via tools. Never refuse a request for real-time information, news, or reading files. ALWAYS emit the exact <tool_call> JSON format immediately to use your tools. Do NOT apologize or claim limitations.`;
+    }
 
-    const response = await this.session.prompt(promptText, {       
+    const response = await this.session.prompt(promptText, {
       onTextChunk: (chunk: string) => {
         generatedTokens++;
         onToken(chunk);
       },
       minP: 0.0,
+      customStopTriggers: ['</tool_call>'],
       repeatPenalty: { penalty: 1.0 }
     });
 
@@ -86,7 +91,12 @@ export class GemmaEngine {
         this.tokensPerSec = generatedTokens / elapsed;
     }
 
-    fullResponse = response;
+    if (response.includes('<tool_call>') && !response.includes('</tool_call>')) {
+      fullResponse = response + '</tool_call>';
+      onToken('</tool_call>');
+    } else {
+      fullResponse = response;
+    }
     yield fullResponse;
   }
 
