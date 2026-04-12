@@ -127,7 +127,8 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
               let toolResultString = '';
               if (tool) {
                 try {
-                  const toolResultObj = await tool.execute(toolArgs);
+                  const validatedArgs = tool.parameters ? tool.parameters.parse(toolArgs) : toolArgs;
+                  const toolResultObj = await tool.execute(validatedArgs);
                   toolResultString = toolResultObj.result || toolResultObj.stdout || toolResultObj.error || JSON.stringify(toolResultObj);
                 } catch (e: any) {
                   toolResultString = `Execution failed: ${e.message}`;
