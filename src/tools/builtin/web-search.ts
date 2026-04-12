@@ -37,7 +37,18 @@ async function enforceRateLimit(): Promise<void> {
 }
 
 function isNewsQuery(query: string): boolean {
-  return /(latest|news|headline|breaking|world\s+news|top\s+stories|war|conflict|negotiation|talks|ceasefire|sanction|diplomacy|election|geopolitics?)/i.test(query);
+  return /(latest|news|headline|breaking|world\s+news|top\s+stories|trend|trends|war|conflict|negotiation|talks|ceasefire|sanction|diplomacy|election|geopolitics?)/i.test(query);
+}
+
+function normalizeInputQuery(query: string): string {
+  const cleaned = query
+    .trim()
+    .replace(/^(ok|okay|please|can you|could you|would you)\s+/i, '')
+    .replace(/^(search\s+the\s+web(?:\s+for)?|search\s+web(?:\s+for)?|web\s+search(?:\s+for)?|look\s+up|find\s+online)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned.length >= 2 ? cleaned : query.trim();
 }
 
 function simplifyQuery(query: string): string {
@@ -247,14 +258,16 @@ Good for: finding documentation, code examples, recent news, package info.`,
 
   async execute(args): Promise<ToolResult> {
     const { query, maxResults, safeSearch } = args;
+    const normalizedQuery = normalizeInputQuery(query);
 
     await enforceRateLimit();
 
-    const ddg = await searchDuckDuckGoWithRetry(query, safeSearch, maxResults);
+    const ddg = await searchDuckDuckGoWithRetry(normalizedQuery, safeSearch, maxResults);
 
     if (ddg.results.length > 0) {
       return {
         query,
+        queryUsed: normalizedQuery,
         provider: 'DuckDuckGo (free, no API key)',
         results: ddg.results,
         count: ddg.results.length,
@@ -263,7 +276,7 @@ Good for: finding documentation, code examples, recent news, package info.`,
       };
     }
 
-    const fallback = await fallbackSearch(query, maxResults);
+    const fallback = await fallbackSearch(normalizedQuery, maxResults);
 
     if (fallback.results.length > 0) {
       return {
@@ -284,7 +297,8 @@ Good for: finding documentation, code examples, recent news, package info.`,
     return {
       query,
       provider: 'Direct search URL fallback',
-      results: buildDirectSearchFallback(query, maxResults),
+      queryUsed: normalizedQuery,
+      results: buildDirectSearchFallback(normalizedQuery, maxResults),
       count: Math.max(1, Math.min(maxResults, 3)),
       total: Math.max(1, Math.min(maxResults, 3)),
       note: ddg.error

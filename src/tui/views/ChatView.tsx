@@ -190,6 +190,52 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     return `${chosen.slice(0, maxChars).trim()}...`;
   };
 
+  const normalizeWebIntentQuery = (query: string): string => {
+    return query
+      .trim()
+      .replace(/^(ok|okay|please|can you|could you|would you)\s+/i, '')
+      .replace(/^(search\s+the\s+web\s+for|search\s+web\s+for|web\s+search\s+for|look\s+up|find\s+online)\s+/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  const hostFromUrl = (url: string): string => {
+    try {
+      return new URL(url).hostname.toLowerCase();
+    } catch {
+      return '';
+    }
+  };
+
+  const buildAspectSearchPlan = (baseQuery: string): Array<{ aspect: string; query: string }> => {
+    const lowered = baseQuery.toLowerCase();
+
+    if (/(war|conflict|negotiation|diploma|ceasefire|sanction|iran|israel|ukraine|military)/i.test(lowered)) {
+      return [
+        { aspect: 'latest developments', query: `${baseQuery} latest developments` },
+        { aspect: 'diplomacy and negotiations', query: `${baseQuery} diplomatic talks negotiation updates` },
+        { aspect: 'official statements', query: `${baseQuery} official statements government response` },
+        { aspect: 'economic and regional impact', query: `${baseQuery} economic impact oil regional impact` },
+      ];
+    }
+
+    if (/(trend|trends|ai|artificial intelligence|machine learning|technology|tech)/i.test(lowered)) {
+      return [
+        { aspect: 'latest updates', query: `${baseQuery} latest news updates` },
+        { aspect: 'business and market', query: `${baseQuery} market business enterprise adoption` },
+        { aspect: 'research and product launches', query: `${baseQuery} research breakthroughs model launches` },
+        { aspect: 'policy and regulation', query: `${baseQuery} policy regulation government response` },
+      ];
+    }
+
+    return [
+      { aspect: 'latest updates', query: `${baseQuery} latest updates` },
+      { aspect: 'background context', query: `${baseQuery} background context` },
+      { aspect: 'expert analysis', query: `${baseQuery} expert analysis` },
+      { aspect: 'regional impact', query: `${baseQuery} regional impact` },
+    ];
+  };
+
   const extractUrlsFromSearch = (searchPayload: WebSearchPayload | null, rawText: string): string[] => {
     const payloadUrls = (searchPayload?.results ?? [])
       .map(item => item.url)
@@ -199,76 +245,165 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     return Array.from(new Set([...payloadUrls, ...textUrls]));
   };
 
+  const selectDiverseUrls = (
+    rows: Array<{ aspect: string; title: string; url: string }>,
+    limit: number
+  ): Array<{ aspect: string; title: string; url: string }> => {
+    const selected: Array<{ aspect: string; title: string; url: string }> = [];
+    const seenUrls = new Set<string>();
+    const seenHosts = new Set<string>();
+
+    const passes: Array<(item: { aspect: string; title: string; url: string }) => boolean> = [
+      item => {
+        const host = hostFromUrl(item.url);
+        return host.length > 0 && host !== 'news.google.com' && !seenHosts.has(host);
+      },
+      item => {
+        const host = hostFromUrl(item.url);
+        return host.length > 0 && !seenHosts.has(host);
+      },
+      item => hostFromUrl(item.url) !== 'news.google.com',
+      () => true,
+    ];
+
+    for (const pass of passes) {
+      for (const row of rows) {
+        if (selected.length >= limit) break;
+        if (seenUrls.has(row.url)) continue;
+        if (!pass(row)) continue;
+
+        selected.push(row);
+        seenUrls.add(row.url);
+        const host = hostFromUrl(row.url);
+        if (host) seenHosts.add(host);
+      }
+
+      if (selected.length >= limit) break;
+    }
+
+    return selected;
+  };
+
   const buildGroundedWebSummary = (
-    query: string,
-    provider: string,
-    docs: Array<{ title: string; url: string; host: string; snippet: string; fetchType: string }>,
-    fallbackResults: WebSearchResultItem[]
+    originalQuery: string,
+    normalizedQuery: string,
+    searchRuns: Array<{ aspect: string; query: string; provider: string; results: WebSearchResultItem[] }> ,
+    docs: Array<{ aspect: string; title: string; url: string; host: string; snippet: string; fetchType: string }>
   ): string => {
     const lines: string[] = [];
+    const uniqueHosts = Array.from(new Set(docs.map(doc => doc.host))).filter(Boolean);
 
-    lines.push(`I completed a grounded web run for: "${query}".`);
+    lines.push(`Query requested: ${originalQuery}`);
+    lines.push(`Search focus used: ${normalizedQuery}`);
     lines.push('');
-    lines.push('What I ran:');
-    lines.push(`1. web-search via ${provider}`);
+    lines.push('Actions completed:');
+    searchRuns.forEach((run, idx) => {
+      lines.push(`${idx + 1}. web-search [${run.aspect}] -> ${run.query} (${run.provider}, results=${run.results.length})`);
+    });
 
     if (docs.length > 0) {
+      const startIndex = searchRuns.length + 1;
       docs.forEach((doc, idx) => {
-        lines.push(`${idx + 2}. web-fetch ${doc.url}`);
+        lines.push(`${startIndex + idx}. web-fetch [${doc.aspect}] -> ${doc.url}`);
       });
 
       lines.push('');
-      lines.push('Grounded summary (from fetched pages only):');
-      docs.forEach((doc) => {
-        lines.push(`- ${doc.title} (${doc.host}, ${doc.fetchType}): ${doc.snippet}`);
+      lines.push('Grounded findings (fetched-content only):');
+      docs.forEach((doc, idx) => {
+        lines.push(`${idx + 1}. [${doc.aspect}] ${doc.title} (${doc.host}, ${doc.fetchType}): ${doc.snippet}`);
       });
 
       lines.push('');
-      lines.push('Sources used:');
-      docs.forEach((doc) => {
-        lines.push(`- ${doc.url}`);
-      });
-
+      lines.push(`Fetched sources used (${uniqueHosts.length}): ${uniqueHosts.join(', ')}`);
       return lines.join('\n');
     }
 
     lines.push('');
-    lines.push('I could not fetch readable article text from the top links, so here are the top search results:');
-    fallbackResults.slice(0, 5).forEach((item) => {
-      const title = item.title || 'Untitled result';
-      const url = item.url || 'Unavailable URL';
-      const desc = item.description || '';
-      lines.push(`- ${title}: ${url}${desc ? ` | ${desc}` : ''}`);
-    });
-
+    lines.push('No readable article bodies were fetched from the discovered links, so a grounded summary could not be generated for this query.');
+    lines.push('Try a narrower query (for example: "latest Reuters analysis on US Iran talks").');
     return lines.join('\n');
   };
 
   const runGroundedWebSearchFlow = async (query: string): Promise<{ toolMessages: SessionMessage[]; assistantMessage: SessionMessage }> => {
     const toolMessages: SessionMessage[] = [];
-    const searchArgs = { query, maxResults: 8, safeSearch: true };
-    const { normalizedArgs: normalizedSearchArgs, resultText: searchResultText } = await executeToolByName('web-search', searchArgs);
+    const normalizedQuery = normalizeWebIntentQuery(query);
+    const searchPlan = buildAspectSearchPlan(normalizedQuery);
+    const searchRuns: Array<{ aspect: string; query: string; provider: string; results: WebSearchResultItem[] }> = [];
 
-    toolMessages.push({
-      role: 'tool_call',
-      content: '',
-      toolName: 'web-search',
-      toolArgs: normalizedSearchArgs,
-      timestamp: nowIso(),
-    });
-    toolMessages.push({
-      role: 'tool_result',
-      content: `<tool_result>${searchResultText}</tool_result>`,
-      timestamp: nowIso(),
-    });
+    const runSingleSearch = async (aspect: string, q: string): Promise<void> => {
+      const searchArgs = { query: q, maxResults: 6, safeSearch: true };
+      const { normalizedArgs: normalizedSearchArgs, resultText: searchResultText } = await executeToolByName('web-search', searchArgs);
 
-    const searchPayload = tryParseJson<WebSearchPayload>(searchResultText);
-    const provider = searchPayload?.provider || 'search fallback';
-    const urls = extractUrlsFromSearch(searchPayload, searchResultText).slice(0, 2);
+      toolMessages.push({
+        role: 'tool_call',
+        content: '',
+        toolName: 'web-search',
+        toolArgs: normalizedSearchArgs,
+        timestamp: nowIso(),
+      });
+      toolMessages.push({
+        role: 'tool_result',
+        content: `<tool_result>${searchResultText}</tool_result>`,
+        timestamp: nowIso(),
+      });
 
-    const docs: Array<{ title: string; url: string; host: string; snippet: string; fetchType: string }> = [];
-    for (const url of urls) {
-      const fetchArgs = { url, maxChars: 8000, timeout: 12000 };
+      const payload = tryParseJson<WebSearchPayload>(searchResultText);
+      const payloadResults = payload?.results ?? [];
+
+      const inferredResults: WebSearchResultItem[] = payloadResults.length > 0
+        ? payloadResults
+        : extractUrlsFromSearch(payload, searchResultText).map((url) => ({
+            url,
+            title: `Result from ${hostFromUrl(url) || 'source'}`,
+            description: '',
+            hostname: hostFromUrl(url),
+          }));
+
+      searchRuns.push({
+        aspect,
+        query: q,
+        provider: payload?.provider || 'search fallback',
+        results: inferredResults,
+      });
+    };
+
+    for (const planned of searchPlan) {
+      await runSingleSearch(planned.aspect, planned.query);
+    }
+
+    const initialRows = searchRuns.flatMap(run =>
+      run.results.map(result => ({
+        aspect: run.aspect,
+        title: result.title || 'Untitled result',
+        url: result.url || '',
+      })).filter(row => /^https?:\/\//i.test(row.url))
+    );
+
+    let selectedUrls = selectDiverseUrls(initialRows, 4);
+    const nonNewsGoogleCount = selectedUrls.filter(item => hostFromUrl(item.url) !== 'news.google.com').length;
+
+    if (nonNewsGoogleCount < 2) {
+      const sourceQueries = ['reuters.com', 'apnews.com', 'bbc.com', 'aljazeera.com'];
+      for (const source of sourceQueries) {
+        await runSingleSearch(`source check: ${source}`, `${normalizedQuery} site:${source}`);
+
+        const rows = searchRuns.flatMap(run =>
+          run.results.map(result => ({
+            aspect: run.aspect,
+            title: result.title || 'Untitled result',
+            url: result.url || '',
+          })).filter(row => /^https?:\/\//i.test(row.url))
+        );
+
+        selectedUrls = selectDiverseUrls(rows, 4);
+        const freshCount = selectedUrls.filter(item => hostFromUrl(item.url) !== 'news.google.com').length;
+        if (freshCount >= 2) break;
+      }
+    }
+
+    const docs: Array<{ aspect: string; title: string; url: string; host: string; snippet: string; fetchType: string }> = [];
+    for (const selected of selectedUrls) {
+      const fetchArgs = { url: selected.url, maxChars: 9000, timeout: 9000 };
       const { normalizedArgs: normalizedFetchArgs, resultText: fetchResultText } = await executeToolByName('web-fetch', fetchArgs);
 
       toolMessages.push({
@@ -288,21 +423,13 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
       if (fetchPayload?.error) continue;
 
       const content = typeof fetchPayload?.content === 'string' ? fetchPayload.content : '';
-      if (content.trim().length < 80) continue;
+      if (content.trim().length < 120) continue;
 
-      const title = fetchPayload?.title || searchPayload?.results?.find(item => item.url === url)?.title || 'Untitled source';
-      const host = (() => {
-        const candidate = fetchPayload?.url || url;
-        try {
-          return new URL(candidate).hostname;
-        } catch {
-          return 'unknown-host';
-        }
-      })();
-
+      const host = hostFromUrl(fetchPayload?.url || selected.url) || 'unknown-host';
       docs.push({
-        title,
-        url,
+        aspect: selected.aspect,
+        title: fetchPayload?.title || selected.title,
+        url: selected.url,
         host,
         snippet: buildSnippetFromContent(content),
         fetchType: fetchPayload?.type || 'content',
@@ -313,7 +440,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
       toolMessages,
       assistantMessage: {
         role: 'assistant',
-        content: buildGroundedWebSummary(query, provider, docs, searchPayload?.results ?? []),
+        content: buildGroundedWebSummary(query, normalizedQuery, searchRuns, docs),
         timestamp: nowIso(),
       },
     };
