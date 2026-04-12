@@ -13,7 +13,10 @@
   },
   "scripts": {
     "build": "tsc && node scripts/postbuild.mjs",
-    "dev": "tsx watch bin/gemma.ts",
+    "dev": "tsx bin/gemma.ts",
+    "dev:watch": "tsx watch bin/gemma.ts",
+    "dev:chat": "tsx bin/gemma.ts chat",
+    "dev:chat:watch": "tsx watch bin/gemma.ts chat",
     "typecheck": "tsc --noEmit",
     "lint": "eslint 'src/**/*.{ts,tsx}' 'bin/**/*.ts'"
   },
