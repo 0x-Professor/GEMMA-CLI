@@ -96,19 +96,66 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     setCurrentResponse('');
 
     if (engine) {
-      try {
-        let text = '';
-        for await (const chunk of engine.streamChat(newMessages, (token) => {
-          text += token;
-          setCurrentResponse(text);
-        })) {
-          // chunks are also aggregated here if needed
+      const executeInference = async (msgs: SessionMessage[]) => {
+        try {
+          let text = '';
+          const responseChunks: string[] = [];
+          for await (const chunk of engine.streamChat(msgs, (token) => {   
+            text += token;
+            setCurrentResponse(text);
+          })) {
+            responseChunks.push(chunk);
+          }
+          
+          // Check for tool call
+          const toolCallMatch = text.match(/<tool_call>(.*?)<\/tool_call>/s);
+          if (toolCallMatch) {
+            const toolCallJson = toolCallMatch[1];
+            try {
+              const toolCallData = JSON.parse(toolCallJson);
+              const toolName = toolCallData.name;
+              const toolArgs = toolCallData.arguments;
+              
+              const contentBeforeTool = text.replace(/<tool_call>.*?<\/tool_call>/s, '').trim();
+              const assistantMsg: SessionMessage = { role: 'assistant', content: contentBeforeTool || 'I used a tool here:', timestamp: new Date().toISOString() };
+              const toolCallMsg: SessionMessage = { role: 'tool_call', content: '', toolName, toolArgs, timestamp: new Date().toISOString() };
+              
+              setMessages(prev => [...prev, assistantMsg, { role: 'system', content: `[Running tool] ${toolName}...`, timestamp: new Date().toISOString() }]);
+              setCurrentResponse('');
+              
+              const tool = globalToolRegistry.list().find(t => t.name === toolName);
+              let toolResultString = '';
+              if (tool) {
+                try {
+                  const toolResultObj = await tool.execute(toolArgs);
+                  toolResultString = toolResultObj.result || toolResultObj.stdout || toolResultObj.error || JSON.stringify(toolResultObj);
+                } catch (e: any) {
+                  toolResultString = `Execution failed: ${e.message}`;
+                }
+              } else {
+                toolResultString = `Error: Tool ${toolName} not found`;
+              }
+              
+              const toolResultMsg: SessionMessage = { role: 'tool_result', content: `<tool_result>${toolResultString}</tool_result>`, timestamp: new Date().toISOString() };
+              const nextMsgs: SessionMessage[] = [...msgs, assistantMsg, toolCallMsg, toolResultMsg];
+              setMessages(prev => [...prev.filter(m => !m.content.startsWith('[Running tool]') && m.content !== assistantMsg.content), assistantMsg, toolCallMsg, toolResultMsg]);
+              
+              await executeInference(nextMsgs);
+            } catch (e: any) {
+               setMessages(prev => [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }, { role: 'system', content: `Failed to parse or run tool call: ${e.message}`, timestamp: new Date().toISOString() }]);
+               setCurrentResponse('');
+            }
+          } else {
+            setMessages(prev => [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }]);
+            setCurrentResponse('');
+          }
+        } catch (err: any) {
+          setMessages(prev => [...prev, { role: 'system', content: `Inference failed: ${err.message}`, timestamp: new Date().toISOString() }]);
+          setCurrentResponse('');
         }
-        setMessages([...newMessages, { role: 'assistant', content: text, timestamp: new Date().toISOString() }]);
-        setCurrentResponse('');
-      } catch (err: any) {
-        setMessages([...newMessages, { role: 'system', content: `Inference failed: ${err.message}`, timestamp: new Date().toISOString() }]);
-      }
+      };
+
+      await executeInference(newMessages);
     }
     setIsInferencing(false);
   };

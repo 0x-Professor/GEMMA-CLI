@@ -60,23 +60,23 @@ export class GemmaEngine {
   ): AsyncGenerator<string> {
     if (!this.session) throw new Error('Model not loaded');
     
-    const lastUserMessage = messages[messages.length - 1];
-    
+    // Pick up the very last message in the continuous array
+    const latestMessage = messages[messages.length - 1];
+
     let fullResponse = '';
-    
+
     // Default recommendations for Gemma
     const startTime = Date.now();
     let generatedTokens = 0;
 
-    const response = await this.session.prompt(lastUserMessage.content, {
+    // Treat tool_result as part of the user continuum for prompting the LLM sequentially
+    const promptText = latestMessage.role === 'tool_result' ? latestMessage.content : latestMessage.content;
+
+    const response = await this.session.prompt(promptText, {       
       onTextChunk: (chunk: string) => {
         generatedTokens++;
         onToken(chunk);
       },
-      signal,
-      temperature: 1.0,
-      topK: 64,
-      topP: 0.95,
       minP: 0.0,
       repeatPenalty: { penalty: 1.0 }
     });

@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '../tools/types.js';
 import type { TaskLedger } from './orchestrator.js';
 import type { GemmaConfig } from '../config/settings.js';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 
 export interface SystemPromptContext {
   tools: ToolDefinition[];
@@ -87,14 +88,18 @@ Use the todo-write tool to manage these tasks.`;
 
   // ── Tool definitions ─────────────────────────────────────────────────
   if (ctx.tools.length > 0) {
-    const toolXml = ctx.tools.map(tool => `<tool name="${tool.name}">
+    const toolXml = ctx.tools.map(tool => {
+        const p = tool.parameters || tool.schema;
+        const schemaObj = p ? zodToJsonSchema(p, "args") : { type: "object", properties: {} };
+        return `<tool name="${tool.name}">
   <description>${tool.description}</description>
-  <parameters>${JSON.stringify((tool.schema ?? tool.parameters)?._def ?? {}, null, 2)}</parameters>
-  </tool>`).join('\n');
+  <parameters>${JSON.stringify(schemaObj, null, 2)}</parameters>
+  </tool>`;
+    }).join('\n');
 
     sections.push(`AVAILABLE TOOLS:
 To call a tool, emit EXACTLY this format and nothing else before the tool result:
-<tool_call>{"name": "tool_name", "arguments": {<args>}}</tool_call>
+<tool_call>{"name": "tool_name", "arguments": ...kwargs...}</tool_call>
 
 Wait for the tool result before continuing.
 
