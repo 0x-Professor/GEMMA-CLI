@@ -14,6 +14,7 @@ export function SlashMenu({ query, onSelect, onClose }: Props) {
     { label: '/model - Switch or download model', value: '/model' },
     { label: '/mcp - Manage MCP servers', value: '/mcp' },
     { label: '/skills - Manage skills', value: '/skills' },
+    { label: '/compact - Summarize conversation context', value: '/compact' },
     { label: '/settings - Edit config', value: '/settings' },
     { label: '/sessions - Browse / resume sessions', value: '/sessions' },
     { label: '/help - Show help', value: '/help' },

@@ -9,6 +9,10 @@ import { SlashMenu } from './SlashMenu.js';
 import { SessionMessage } from '../../session/types.js';
 import { GemmaEngine } from '../../core/inference.js';
 import { loadConfig } from '../../config/settings.js';
+import { applyIncrementalSummarization } from '../../core/compaction.js';
+import { buildSystemPrompt } from '../../core/system-prompt.js';
+import { globalToolRegistry } from '../../tools/registry.js';
+import { SessionManager } from '../../session/manager.js';
 
 export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }) {
   const { exit } = useApp();
@@ -23,7 +27,17 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
 
   useEffect(() => {
     const e = new GemmaEngine();
-    e.loadModel(config.model).then(() => setEngine(e)).catch(err => {
+    // In a real app we'd load the specific session's memory and anchor block, but for now we'll mock them
+    const sysPrompt = buildSystemPrompt({
+      tools: globalToolRegistry.list(),
+      allowedDirs: [process.cwd()],
+      deniedDirs: ['.git', 'node_modules'],
+      approvalMode: config.approvalMode || 'ask',
+      sessionMemory: {}, // To be populated from session manager
+      anchorBlock: '', // Connect with orchestrator for session resume
+    });
+
+    e.loadModel(config.model, sysPrompt).then(() => setEngine(e)).catch(err => {
       setMessages([{ role: 'system', content: `Error loading model: ${err.message}`, timestamp: new Date().toISOString() }]);
     });
     return () => { e.unloadModel(); };
@@ -41,7 +55,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     setInputKey(k => k + 1);
   };
 
-  const handleCommand = (cmd: string) => {
+  const handleCommand = async (cmd: string) => {
     clearInput();
     if (cmd === '/exit') {
       exit();
@@ -49,6 +63,18 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     }
     if (cmd === '/model') {
       if (onNavigate) onNavigate('onboarding');
+      return;
+    }
+    if (cmd === '/compact') {
+      if (!engine) return;
+      setIsInferencing(true);
+      try {
+        const { messages: compacted, summary } = await applyIncrementalSummarization(messages as any, 6, engine);
+        setMessages([...compacted, { role: 'system', content: `Compaction complete. Summary: ${summary.slice(0, 100)}...`, timestamp: new Date().toISOString() }] as any);
+      } catch (err: any) {
+        setMessages([...messages, { role: 'system', content: `Compaction failed: ${err.message}`, timestamp: new Date().toISOString() }]);
+      }
+      setIsInferencing(false);
       return;
     }
     setMessages(prevMessages => [...prevMessages, { role: 'system', content: `Command ${cmd} is not fully implemented yet in this preview.`, timestamp: new Date().toISOString() }]);

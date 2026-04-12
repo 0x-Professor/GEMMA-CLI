@@ -66,6 +66,25 @@ ${Object.entries(ctx.sessionMemory)
 ${ctx.anchorBlock}`);
   }
 
+  // ── Task Ledger ──────────────────────────────────────────────────────
+  if (ctx.ledger && ctx.ledger.tasks.length > 0) {
+    const pending = ctx.ledger.tasks.filter(t => t.status === 'pending');
+    const inProgress = ctx.ledger.tasks.filter(t => t.status === 'in_progress');
+    
+    let ledgerText = `ACTIVE TASKS:
+${inProgress.length > 0 ? inProgress.map(t => `- [IN PROGRESS] ${t.title} (${t.id})`).join('\n') : 'None'}
+
+PENDING TASKS:
+${pending.length > 0 ? pending.map(t => `- [${t.priority}] ${t.title} (${t.id})`).join('\n') : 'None'}
+
+Use the todo-write tool to manage these tasks.`;
+
+    if (ctx.ledger.goal) {
+      ledgerText = `CURRENT GOAL: ${ctx.ledger.goal}\n\n` + ledgerText;
+    }
+    sections.push(ledgerText);
+  }
+
   // ── Tool definitions ─────────────────────────────────────────────────
   if (ctx.tools.length > 0) {
     const toolXml = ctx.tools.map(tool => `<tool name="${tool.name}">
