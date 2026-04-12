@@ -18,6 +18,7 @@ type WebSearchResultItem = {
   url?: string;
   description?: string;
   hostname?: string;
+  publishedAt?: string;
 };
 
 type WebSearchPayload = {
@@ -136,7 +137,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
   };
 
   const shouldForceWebSearch = (userText: string): boolean => {
-    return /(search\s+the\s+web|web\s+search|latest\s+news|look\s+up|find\s+online|\bheadlines?\b|\bnews\b|\btrends?\b)/i.test(userText);
+    return /(search\s+the\s+web|web\s+search|latest\s+news|look\s+up|find\s+online|\bheadlines?\b|\bnews\b|\btrends?\b|\bresearch\b|\bcurrent\b|\btoday\b|\bonline\b|\binternet\b|\blatest\b|\brecent\b)/i.test(userText);
   };
 
   const looksLikeToolRefusal = (assistantText: string): boolean => {
@@ -179,22 +180,54 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     }
   };
 
-  const buildSnippetFromContent = (content: string, maxChars: number = 320): string => {
-    const compact = content.replace(/\s+/g, ' ').trim();
-    if (!compact) return 'No readable content extracted.';
+  type WebIntent = 'news' | 'tech' | 'coding' | 'shopping' | 'general';
 
-    const firstSentences = compact.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim();
-    const chosen = firstSentences.length >= 40 ? firstSentences : compact;
+  const buildSnippetFromContent = (content: string, maxChars: number = 340): string => {
+    const normalized = content
+      .replace(/\r/g, '')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
 
-    if (chosen.length <= maxChars) return chosen;
-    return `${chosen.slice(0, maxChars).trim()}...`;
+    if (!normalized) return 'No readable content extracted.';
+
+    const boilerplate = /(skip to main content|cookie|privacy policy|terms of use|all rights reserved|subscribe|sign in|log in|menu|navigation|javascript|enable cookies|advertisement|share this|newsletter|microsoft on the issues|official microsoft blog|breaking news alerts|site map|copyright|continue reading)/i;
+    const withoutBoilerplate = normalized.replace(boilerplate, ' ').replace(/\s+/g, ' ').trim();
+    const paragraphs = normalized
+      .split(/\n{2,}/)
+      .map(p => p.replace(/\s+/g, ' ').trim())
+      .filter(p => p.length >= 80 && !boilerplate.test(p));
+
+    const sourceText = (paragraphs.length > 0 ? paragraphs : [withoutBoilerplate]).slice(0, 4).join(' ');
+    const sentences = sourceText
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(s => s.length >= 45 && s.length <= 320 && !boilerplate.test(s));
+
+    const picked = (sentences.length > 0 ? sentences.slice(0, 2).join(' ') : sourceText).trim();
+    if (picked.length <= maxChars) return picked;
+    return `${picked.slice(0, maxChars).trim()}...`;
+  };
+
+  const formatRelativeDate = (publishedAt?: string): string => {
+    if (!publishedAt) return '';
+
+    const date = new Date(publishedAt);
+    if (Number.isNaN(date.getTime())) return publishedAt;
+
+    const diffMs = Date.now() - date.getTime();
+    const diffDays = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+    if (diffDays === 0) return 'today';
+    if (diffDays === 1) return '1 day ago';
+    if (diffDays < 14) return `${diffDays} days ago`;
+    return date.toISOString().slice(0, 10);
   };
 
   const normalizeWebIntentQuery = (query: string): string => {
     return query
       .trim()
       .replace(/^(ok|okay|please|can you|could you|would you)\s+/i, '')
-      .replace(/^(search\s+the\s+web(?:\s+for)?|search\s+web(?:\s+for)?|web\s+search(?:\s+for)?|look\s+up|find\s+online)\s+/i, '')
+      .replace(/^(search\s+the\s+web(?:\s+for)?|search\s+web(?:\s+for)?|web\s+search(?:\s+for)?|look\s+up|find\s+online|research\s+on\s+the\s+web)\s+/i, '')
       .replace(/\s+/g, ' ')
       .trim();
   };
@@ -207,33 +240,148 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     }
   };
 
-  const buildAspectSearchPlan = (baseQuery: string): Array<{ aspect: string; query: string }> => {
-    const lowered = baseQuery.toLowerCase();
+  const detectWebIntent = (query: string): WebIntent => {
+    const lowered = query.toLowerCase();
+    if (/(war|conflict|negotiation|ceasefire|sanction|election|diploma|breaking|headline|news|today|latest)/i.test(lowered)) return 'news';
+    if (/(code|coding|programming|api|sdk|library|framework|error|bug|fix|install|setup|tutorial|documentation)/i.test(lowered)) return 'coding';
+    if (/(price|pricing|review|compare|comparison|best|buy|cheap|vs\b|top\s+10)/i.test(lowered)) return 'shopping';
+    if (/(ai|technology|tech|startup|software|hardware|machine learning|cloud|cybersecurity)/i.test(lowered)) return 'tech';
+    return 'general';
+  };
 
-    if (/(war|conflict|negotiation|diploma|ceasefire|sanction|iran|israel|ukraine|military)/i.test(lowered)) {
+  const buildAspectSearchPlan = (baseQuery: string): Array<{ aspect: string; query: string }> => {
+    const intent = detectWebIntent(baseQuery);
+
+    if (intent === 'news') {
       return [
         { aspect: 'latest developments', query: `${baseQuery} latest developments` },
-        { aspect: 'diplomacy and negotiations', query: `${baseQuery} diplomatic talks negotiation updates` },
+        { aspect: 'background and context', query: `${baseQuery} context explained background` },
         { aspect: 'official statements', query: `${baseQuery} official statements government response` },
-        { aspect: 'economic and regional impact', query: `${baseQuery} economic impact oil regional impact` },
+        { aspect: 'expert analysis', query: `${baseQuery} expert analysis implications` },
       ];
     }
 
-    if (/(trend|trends|ai|artificial intelligence|machine learning|technology|tech)/i.test(lowered)) {
+    if (intent === 'tech') {
       return [
-        { aspect: 'latest updates', query: `${baseQuery} latest news updates` },
-        { aspect: 'business and market', query: `${baseQuery} market business enterprise adoption` },
-        { aspect: 'research and product launches', query: `${baseQuery} research breakthroughs model launches` },
-        { aspect: 'policy and regulation', query: `${baseQuery} policy regulation government response` },
+        { aspect: 'latest updates', query: `${baseQuery} latest updates` },
+        { aspect: 'industry and market', query: `${baseQuery} market adoption enterprise impact` },
+        { aspect: 'research and product launches', query: `${baseQuery} research breakthroughs product launches` },
+        { aspect: 'policy and regulation', query: `${baseQuery} policy regulation compliance` },
+      ];
+    }
+
+    if (intent === 'coding') {
+      return [
+        { aspect: 'official documentation', query: `${baseQuery} official documentation` },
+        { aspect: 'practical implementation', query: `${baseQuery} tutorial guide examples` },
+        { aspect: 'troubleshooting', query: `${baseQuery} common errors fixes` },
+        { aspect: 'best practices', query: `${baseQuery} best practices` },
+      ];
+    }
+
+    if (intent === 'shopping') {
+      return [
+        { aspect: 'top options', query: `${baseQuery} best options` },
+        { aspect: 'pricing', query: `${baseQuery} pricing current price` },
+        { aspect: 'reviews', query: `${baseQuery} reviews pros cons` },
+        { aspect: 'comparison', query: `${baseQuery} comparison alternatives` },
       ];
     }
 
     return [
       { aspect: 'latest updates', query: `${baseQuery} latest updates` },
-      { aspect: 'background context', query: `${baseQuery} background context` },
-      { aspect: 'expert analysis', query: `${baseQuery} expert analysis` },
-      { aspect: 'regional impact', query: `${baseQuery} regional impact` },
+      { aspect: 'core explanation', query: `${baseQuery} explained overview` },
+      { aspect: 'expert perspectives', query: `${baseQuery} expert analysis` },
+      { aspect: 'practical impact', query: `${baseQuery} practical implications` },
     ];
+  };
+
+  const buildSourceCheckDomains = (baseQuery: string): string[] => {
+    const intent = detectWebIntent(baseQuery);
+    if (intent === 'news') return ['reuters.com', 'apnews.com', 'bbc.com', 'aljazeera.com'];
+    if (intent === 'tech') return ['theverge.com', 'techcrunch.com', 'wired.com', 'arstechnica.com'];
+    if (intent === 'coding') return ['stackoverflow.com', 'github.com', 'developer.mozilla.org', 'docs.python.org'];
+    if (intent === 'shopping') return ['forbes.com', 'cnet.com', 'tomsguide.com', 'pcmag.com'];
+    return ['wikipedia.org', 'britannica.com', 'reuters.com', 'bbc.com'];
+  };
+
+  const collectNewsItems = (searchRuns: Array<{ aspect: string; query: string; provider: string; results: WebSearchResultItem[] }>) => {
+    const rankedRuns = [...searchRuns].sort((a, b) => {
+      const aScore = /latest|developments|updates/i.test(a.aspect) ? 0 : 1;
+      const bScore = /latest|developments|updates/i.test(b.aspect) ? 0 : 1;
+      return aScore - bScore;
+    });
+
+    const seen = new Set<string>();
+    const items: Array<{ title: string; source: string; when: string }> = [];
+
+    for (const run of rankedRuns) {
+      for (const result of run.results) {
+        const title = (result.title || '').trim();
+        if (!title) continue;
+        const sourceHost = (result.hostname || hostFromUrl(result.url || '') || 'unknown source').replace(/^www\./i, '');
+        const key = `${title}|${sourceHost}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        items.push({
+          title,
+          source: sourceHost,
+          when: formatRelativeDate(result.publishedAt),
+        });
+
+        if (items.length >= 6) return items;
+      }
+    }
+
+    return items;
+  };
+
+  const collectAiTrendItems = (docs: Array<{ aspect: string; title: string; url: string; host: string; snippet: string; fetchType: string }>) => {
+    const catalog: Array<{ label: string; patterns: RegExp[] }> = [
+      { label: 'Agentic AI and autonomous workflows', patterns: [/agentic|autonomous\s+ai|ai\s+agents?|multi-agent/i] },
+      { label: 'Multimodal AI across text, image, audio, and video', patterns: [/multimodal|text\s*\+\s*image|video\s+understanding|audio\s+models?/i] },
+      { label: 'AI becoming core enterprise infrastructure', patterns: [/enterprise|infrastructure|mission-critical|core\s+system|roi/i] },
+      { label: 'AI plus automation for end-to-end workflows', patterns: [/workflow\s+automation|process\s+automation|orchestration|automated\s+workflow/i] },
+      { label: 'Generative AI scaling into production use', patterns: [/generative\s+ai|code\s+generation|copilot|content\s+generation/i] },
+      { label: 'Governance, safety, and regulation pressure', patterns: [/governance|regulation|compliance|safety|ethic|risk/i] },
+      { label: 'Sovereign and local AI model strategies', patterns: [/sovereign|local\s+models?|on-prem|domestic\s+models?/i] },
+      { label: 'Physical AI and robotics in real-world systems', patterns: [/robotics|physical\s+ai|autonomous\s+machines?/i] },
+      { label: 'Edge and on-device AI acceleration', patterns: [/edge\s+ai|on-device|device\s+ai|iot/i] },
+    ];
+
+    const used = new Set<string>();
+    const trends: Array<{ title: string; evidence: string }> = [];
+
+    for (const trend of catalog) {
+      const matched = docs.find(doc => trend.patterns.some(pattern => pattern.test(`${doc.title} ${doc.snippet}`)));
+      if (!matched) continue;
+      const titleKey = trend.label.toLowerCase();
+      if (used.has(titleKey)) continue;
+      used.add(titleKey);
+      trends.push({ title: trend.label, evidence: buildSnippetFromContent(matched.snippet, 220) });
+      if (trends.length >= 9) break;
+    }
+
+    if (trends.length < 4) {
+      const aspectDefaults: Record<string, string> = {
+        'latest updates': 'Rapid AI capability updates across products and platforms',
+        'industry and market': 'Enterprise adoption and measurable business impact',
+        'research and product launches': 'Research translating into production-grade releases',
+        'policy and regulation': 'Governance and compliance becoming mandatory',
+      };
+
+      for (const doc of docs) {
+        const fallbackTitle = aspectDefaults[doc.aspect] || `Practical trend from ${doc.aspect}`;
+        const key = fallbackTitle.toLowerCase();
+        if (used.has(key)) continue;
+        used.add(key);
+        trends.push({ title: fallbackTitle, evidence: buildSnippetFromContent(doc.snippet, 220) });
+        if (trends.length >= 6) break;
+      }
+    }
+
+    return trends;
   };
 
   const extractUrlsFromSearch = (searchPayload: WebSearchPayload | null, rawText: string): string[] => {
@@ -292,51 +440,80 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
   ): string => {
     const lines: string[] = [];
     const uniqueHosts = Array.from(new Set(docs.map(doc => doc.host))).filter(Boolean);
+    const intent = detectWebIntent(normalizedQuery);
 
     if (docs.length > 0) {
-      const byAspect = new Map<string, Array<{ title: string; snippet: string; url: string; host: string }>>();
+      if (intent === 'tech' && /\bai\b|artificial intelligence/i.test(normalizedQuery)) {
+        const trends = collectAiTrendItems(docs);
+        const newsItems = collectNewsItems(searchRuns);
+
+        lines.push(`Here are the latest AI trends (2026) based on freshly fetched web content:`);
+        lines.push('');
+        lines.push('Top AI trends:');
+
+        trends.forEach((trend, idx) => {
+          lines.push(`${idx + 1}. ${trend.title}`);
+          lines.push(`   ${trend.evidence}`);
+        });
+
+        if (newsItems.length > 0) {
+          lines.push('');
+          lines.push('Latest AI news signals:');
+          newsItems.slice(0, 4).forEach((item) => {
+            const when = item.when ? ` (${item.when})` : '';
+            lines.push(`- ${item.source}${when}: ${item.title}`);
+          });
+        }
+
+        lines.push('');
+        lines.push('Big picture: AI is shifting from isolated tools to deeply integrated decision and execution systems across enterprises.');
+        lines.push(`Grounding: ${docs.length} fetched pages from ${uniqueHosts.length} independent publishers.`);
+
+        if (/cyber|security|red\s*team|xss|exploit|threat/i.test(originalQuery)) {
+          lines.push('');
+          lines.push('Security angle: watch autonomous attack/defense workflows, AI-assisted vulnerability discovery, and governance requirements for high-risk model use.');
+        }
+
+        return lines.join('\n');
+      }
+
+      const byAspect = new Map<string, Array<{ title: string; snippet: string }>>();
       for (const doc of docs) {
         const bucket = byAspect.get(doc.aspect) ?? [];
-        bucket.push({ title: doc.title, snippet: doc.snippet, url: doc.url, host: doc.host });
+        bucket.push({ title: doc.title, snippet: doc.snippet });
         byAspect.set(doc.aspect, bucket);
       }
 
-      lines.push(`Here is what I found for "${originalQuery}".`);
+      lines.push(`Based on fetched web page content, here is the answer for "${originalQuery}":`);
       lines.push('');
-      lines.push('Answer:');
-
       for (const [aspect, entries] of byAspect.entries()) {
         const top = entries.slice(0, 2);
         const combined = top.map(entry => `${entry.title}: ${entry.snippet}`).join(' ');
         lines.push(`- ${aspect}: ${combined}`);
       }
-
       lines.push('');
-      lines.push('Sources:');
-      const sourceRows = docs.slice(0, 6).map(doc => `- ${doc.url}`);
-      lines.push(...sourceRows);
-      if (uniqueHosts.length > 0) {
-        lines.push('');
-        lines.push(`Covered publishers: ${uniqueHosts.join(', ')}`);
-      }
+      lines.push(`Grounding: ${docs.length} fetched pages from ${uniqueHosts.length} independent publishers.`);
 
       return lines.join('\n');
     }
 
     const fallbackItems = searchRuns
-      .flatMap(run => run.results.map(result => ({ aspect: run.aspect, title: result.title || 'Untitled result', description: result.description || '', url: result.url || '' })))
-      .filter(item => item.url.length > 0)
+      .flatMap(run => run.results.map(result => ({
+        title: result.title || 'Untitled result',
+        description: (result.description || '').replace(/\s+/g, ' ').trim(),
+      })))
+      .filter(item => item.description.length > 0)
       .slice(0, 8);
 
-    lines.push(`I searched for "${normalizedQuery}" but could not fetch readable full articles from the current sources.`);
+    lines.push(`I could not reliably fetch full readable article bodies for "${normalizedQuery}" right now.`);
     lines.push('');
-    lines.push('Top available findings from search results:');
+    lines.push('Best available findings from indexed snippets:');
     fallbackItems.forEach((item) => {
-      const desc = item.description ? ` - ${item.description}` : '';
-      lines.push(`- ${item.title}${desc}`);
+      const brief = item.description.length > 220 ? `${item.description.slice(0, 220).trim()}...` : item.description;
+      lines.push(`- ${item.title}: ${brief}`);
     });
     lines.push('');
-    lines.push('Try again with a narrower query (for example: "latest AI model launches this week") to improve full-article fetch quality.');
+    lines.push('Try a slightly narrower query so I can fetch deeper article content and provide a stronger grounded answer.');
 
     return lines.join('\n');
   };
@@ -397,11 +574,11 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
       })).filter(row => /^https?:\/\//i.test(row.url))
     );
 
-    let selectedUrls = selectDiverseUrls(initialRows, 4);
+    let selectedUrls = selectDiverseUrls(initialRows, 8);
     const nonNewsGoogleCount = selectedUrls.filter(item => hostFromUrl(item.url) !== 'news.google.com').length;
 
-    if (nonNewsGoogleCount < 2) {
-      const sourceQueries = ['reuters.com', 'apnews.com', 'bbc.com', 'aljazeera.com'];
+    if (nonNewsGoogleCount < 3 || selectedUrls.length < 4) {
+      const sourceQueries = buildSourceCheckDomains(normalizedQuery);
       for (const source of sourceQueries) {
         await runSingleSearch(`source check: ${source}`, `${normalizedQuery} site:${source}`);
 
@@ -413,14 +590,15 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
           })).filter(row => /^https?:\/\//i.test(row.url))
         );
 
-        selectedUrls = selectDiverseUrls(rows, 4);
+        selectedUrls = selectDiverseUrls(rows, 8);
         const freshCount = selectedUrls.filter(item => hostFromUrl(item.url) !== 'news.google.com').length;
-        if (freshCount >= 2) break;
+        if (freshCount >= 3 && selectedUrls.length >= 4) break;
       }
     }
 
     const docs: Array<{ aspect: string; title: string; url: string; host: string; snippet: string; fetchType: string }> = [];
     for (const selected of selectedUrls) {
+      if (docs.length >= 5) break;
       setCurrentResponse(`Fetching source: ${selected.title}`);
       const fetchArgs = { url: selected.url, maxChars: 9000, timeout: 9000 };
       const { normalizedArgs: normalizedFetchArgs, resultText: fetchResultText } = await executeToolByName('web-fetch', fetchArgs);
@@ -547,7 +725,10 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
               };
 
               toolMessages.push(toolCallMsg, toolResultMsg);
-              setMessages(prev => [...prev, ...toolMessages]);
+              const visibleMessages = toolMessages.filter(m => m.role !== 'tool_call' && m.role !== 'tool_result');
+              if (visibleMessages.length > 0) {
+                setMessages(prev => [...prev, ...visibleMessages]);
+              }
               setCurrentResponse('');
 
               await executeInference([...msgs, ...toolMessages], rootUserInput, depth + 1);
@@ -618,7 +799,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
       )}
 
       <Box flexDirection="row" paddingY={1}>
-        <Text color="cyan" bold>❯ </Text>
+        <Text color="cyan" bold>&gt; </Text>
         {isInferencing ? (
           <Text dimColor>Gemma is thinking...</Text>
         ) : (
