@@ -1,3 +1,8 @@
+import os from 'os';
+import path from 'path';
+
+export const SESSIONS_DIR = path.join(os.homedir(), '.gemma-cli', 'sessions');
+
 export const GEMMA_MODELS = {
   'gemma-3-1b-it': {
     displayName: 'Gemma 3 1B Instruct',

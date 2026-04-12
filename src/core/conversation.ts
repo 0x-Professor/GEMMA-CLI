@@ -1,6 +1,8 @@
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
+  timestamp?: string;
+  tokenCount?: number;
 }
 
 export class ConversationHistory {

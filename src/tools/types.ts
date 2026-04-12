@@ -3,6 +3,10 @@ import { z } from 'zod';
 export interface ToolDefinition<T extends z.ZodRawShape = z.ZodRawShape> {
   name: string;
   description: string;
+  category?: string;
+  displayName?: string;
+  riskLevel?: string;
+  schema?: z.ZodObject<T> | z.ZodTypeAny;
   parameters: z.ZodObject<T>;
   execute: (args: z.infer<z.ZodObject<T>>) => Promise<ToolResult>;
 }
@@ -18,4 +22,5 @@ export interface ToolResult {
   exitCode?: number;
   result?: string;
   error?: string;
+  [key: string]: any;
 }
