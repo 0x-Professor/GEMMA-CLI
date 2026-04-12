@@ -1,3 +1,6 @@
+import type { GemmaEngine } from './inference.js';
+import { maybeCompact, CompactionPhase, CompactionResult } from './compaction.js';
+
 export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
@@ -28,5 +31,16 @@ export class ConversationHistory {
   clear() {
     this.messages = [];
     this.tokenCount = 0;
+  }
+
+  async prepareForInference(
+    engine: GemmaEngine,
+    onPhaseStart?: (phase: CompactionPhase, usage: number) => void
+  ): Promise<CompactionResult> {
+    const ctxLen = Math.max(engine.getStats().contextMax, this.maxTokens);
+    const { messages, result } = await maybeCompact(this.messages, ctxLen, engine, undefined, onPhaseStart);
+    this.messages = messages;
+    this.tokenCount = result.tokensAfter;
+    return result;
   }
 }

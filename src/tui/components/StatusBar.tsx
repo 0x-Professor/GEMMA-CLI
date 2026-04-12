@@ -10,16 +10,22 @@ interface Props {
 
 export function StatusBar({ modelId, tokens, maxTokens, sessionId }: Props) {
   const shortId = sessionId.split('-')[0] || sessionId;
-  const isDanger = tokens > maxTokens * 0.85;
+  const ratio = tokens / maxTokens;
+  const isDanger = ratio > 0.85;
+  const isWarning = ratio > 0.65;
+  
+  const color = isDanger ? 'red' : isWarning ? 'yellow' : 'green';
+  const hint = isWarning ? <Text color="yellow"> ⚡ /compact hint </Text> : null;
 
   return (
     <Box flexDirection="row" marginTop={1} justifyContent="space-between">
       <Box flexDirection="row">
         <Text color="cyan">{modelId}</Text>
         <Text dimColor> │ </Text>
-        <Text color={isDanger ? 'yellow' : 'green'}>
+        <Text color={color}>
           {tokens}/{maxTokens} tokens
         </Text>
+        {hint}
         <Text dimColor> │ </Text>
         <Text dimColor>#{shortId}</Text>
       </Box>

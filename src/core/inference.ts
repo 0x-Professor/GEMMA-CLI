@@ -12,7 +12,7 @@ export class GemmaEngine {
   private session?: LlamaChatSession;
   private tokensPerSec: number = 0;
 
-  async loadModel(modelId: string): Promise<void> {
+  async loadModel(modelId: string, systemPrompt?: string): Promise<void> {
     const config = GEMMA_MODELS[modelId as ModelId];
     if (!config) throw new Error(`Unknown model: ${modelId}`);
 
@@ -42,7 +42,10 @@ export class GemmaEngine {
       this.ctx = await this.model.createContext({ contextSize: Math.min(config.contextLength, 8192) });
       const seq = this.ctx.getSequence();
 
-      this.session = new LlamaChatSession({ contextSequence: seq });
+      this.session = new LlamaChatSession({ 
+        contextSequence: seq,
+        systemPrompt
+      });
     } finally {
       console.warn = cw;
       console.error = ce;
