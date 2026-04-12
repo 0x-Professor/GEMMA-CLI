@@ -16,11 +16,16 @@ type SearchResultItem = {
 // Enforce at least 1500ms between searches within a session.
 let lastSearchTime = 0;
 const MIN_SEARCH_INTERVAL_MS = 1500;
+const REQUEST_TIMEOUT_MS = 12000;
 
 const DEFAULT_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (compatible; gemma-cli/1.0; +local)',
   'Accept-Language': 'en-US,en;q=0.9',
 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function enforceRateLimit(): Promise<void> {
   const now = Date.now();
@@ -32,7 +37,25 @@ async function enforceRateLimit(): Promise<void> {
 }
 
 function isNewsQuery(query: string): boolean {
-  return /(latest|news|headline|breaking|world\s+news|top\s+stories)/i.test(query);
+  return /(latest|news|headline|breaking|world\s+news|top\s+stories|war|conflict|negotiation|talks|ceasefire|sanction|diplomacy|election|geopolitics?)/i.test(query);
+}
+
+function simplifyQuery(query: string): string {
+  const stopWords = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'between', 'for', 'from', 'had',
+    'has', 'have', 'how', 'i', 'in', 'is', 'it', 'of', 'on', 'or', 'related',
+    'the', 'them', 'to', 'was', 'what', 'when', 'where', 'who', 'why', 'with',
+  ]);
+
+  const terms = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter(term => !stopWords.has(term));
+
+  const compact = terms.slice(0, 10).join(' ').trim();
+  return compact.length >= 3 ? compact : query.trim();
 }
 
 function decodeHtmlEntities(input: string): string {
@@ -55,6 +78,14 @@ function extractXmlTag(block: string, tag: string): string {
   return match?.[1]?.trim() ?? '';
 }
 
+function getHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 function normalizeResults(items: Array<Omit<SearchResultItem, 'rank'>>): SearchResultItem[] {
   return items
     .filter(item => item.url)
@@ -62,29 +93,19 @@ function normalizeResults(items: Array<Omit<SearchResultItem, 'rank'>>): SearchR
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
 }
 
-async function searchGoogleNewsRss(query: string, maxResults: number): Promise<SearchResultItem[]> {
-  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
-  const xml = await got(rssUrl, { headers: DEFAULT_HEADERS, timeout: { request: 12000 } }).text();
-
-  const itemBlocks = xml.match(/<item>[\s\S]*?<\/item>/g) ?? [];
-  const items = itemBlocks.map((block) => {
+function parseRssResults(xml: string, maxResults: number): SearchResultItem[] {
+  const itemBlocks = xml.match(/<item>[\s\S]*?<\/item>/gi) ?? [];
+  const items: Array<Omit<SearchResultItem, 'rank'>> = itemBlocks.map((block) => {
     const title = stripHtml(extractXmlTag(block, 'title'));
-    const url = extractXmlTag(block, 'link');
+    const url = decodeHtmlEntities(extractXmlTag(block, 'link'));
     const description = stripHtml(extractXmlTag(block, 'description'));
     const publishedAt = extractXmlTag(block, 'pubDate');
-
-    let hostname = '';
-    try {
-      hostname = new URL(url).hostname;
-    } catch {
-      hostname = '';
-    }
 
     return {
       title,
       url,
       description,
-      hostname,
+      hostname: getHostname(url),
       publishedAt: publishedAt || undefined,
     };
   });
@@ -92,49 +113,117 @@ async function searchGoogleNewsRss(query: string, maxResults: number): Promise<S
   return normalizeResults(items).slice(0, maxResults);
 }
 
-async function searchBingHtml(query: string, maxResults: number): Promise<SearchResultItem[]> {
-  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-  const html = await got(url, { headers: DEFAULT_HEADERS, timeout: { request: 12000 } }).text();
-
-  const blocks = html.match(/<li class="b_algo"[\s\S]*?<\/li>/g) ?? [];
-  const items: Array<Omit<SearchResultItem, 'rank'>> = [];
-
-  for (const block of blocks) {
-    const linkMatch = block.match(/<h2><a href="([^"]+)"[^>]*>([\s\S]*?)<\/a><\/h2>/i);
-    if (!linkMatch) continue;
-
-    const snippetMatch = block.match(/<p>([\s\S]*?)<\/p>/i);
-    const rawUrl = linkMatch[1];
-    const title = stripHtml(linkMatch[2]);
-    const description = stripHtml(snippetMatch?.[1] ?? '');
-
-    let hostname = '';
-    try {
-      hostname = new URL(rawUrl).hostname;
-    } catch {
-      hostname = '';
-    }
-
-    items.push({ title, url: rawUrl, description, hostname });
-  }
-
-  return normalizeResults(items).slice(0, maxResults);
+async function searchGoogleNewsRss(query: string, maxResults: number): Promise<SearchResultItem[]> {
+  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
+  const xml = await got(rssUrl, { headers: DEFAULT_HEADERS, timeout: { request: REQUEST_TIMEOUT_MS } }).text();
+  return parseRssResults(xml, maxResults);
 }
 
-async function fallbackSearch(query: string, maxResults: number): Promise<{ provider: string; results: SearchResultItem[] }> {
-  if (isNewsQuery(query)) {
+async function searchBingRss(query: string, maxResults: number): Promise<SearchResultItem[]> {
+  const rssUrl = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
+  const xml = await got(rssUrl, { headers: DEFAULT_HEADERS, timeout: { request: REQUEST_TIMEOUT_MS } }).text();
+  return parseRssResults(xml, maxResults);
+}
+
+function buildDirectSearchFallback(query: string, maxResults: number): SearchResultItem[] {
+  const encoded = encodeURIComponent(query);
+  const items: Array<Omit<SearchResultItem, 'rank'>> = [
+    {
+      title: `Open Bing search for: ${query}`,
+      url: `https://www.bing.com/search?q=${encoded}`,
+      description: 'Direct search URL fallback when live providers cannot be parsed.',
+      hostname: 'www.bing.com',
+    },
+    {
+      title: `Open Google search for: ${query}`,
+      url: `https://www.google.com/search?q=${encoded}`,
+      description: 'Alternative direct search URL.',
+      hostname: 'www.google.com',
+    },
+    {
+      title: `Open Google News search for: ${query}`,
+      url: `https://news.google.com/search?q=${encoded}`,
+      description: 'News-focused fallback for current events.',
+      hostname: 'news.google.com',
+    },
+  ];
+
+  return normalizeResults(items).slice(0, Math.max(1, Math.min(maxResults, 3)));
+}
+
+async function searchDuckDuckGoWithRetry(query: string, safeSearch: boolean, maxResults: number): Promise<{ results: SearchResultItem[]; error?: string }> {
+  let lastError: string | undefined;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const newsResults = await searchGoogleNewsRss(query, maxResults);
-      if (newsResults.length > 0) {
-        return { provider: 'Google News RSS fallback', results: newsResults };
+      const rawResults = await search(query, {
+        safeSearch: safeSearch ? SafeSearchType.STRICT : SafeSearchType.OFF,
+      });
+
+      if (!rawResults.noResults && rawResults.results?.length) {
+        const results = rawResults.results.slice(0, maxResults).map((r, i) => ({
+          rank: i + 1,
+          title: r.title,
+          url: r.url,
+          description: r.description ?? '',
+          hostname: getHostname(r.url),
+        }));
+
+        return { results };
       }
-    } catch {
-      // Continue to generic fallback.
+
+      return { results: [], error: 'No results from DuckDuckGo.' };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError = msg;
+      const retryable = /(VQD|rate|anomaly|too quickly)/i.test(msg);
+      if (!retryable || attempt === 3) break;
+      await sleep(500 * attempt + Math.floor(Math.random() * 250));
     }
   }
 
-  const bingResults = await searchBingHtml(query, maxResults);
-  return { provider: 'Bing HTML fallback', results: bingResults };
+  return { results: [], error: lastError ?? 'DuckDuckGo request failed.' };
+}
+
+async function fallbackSearch(
+  query: string,
+  maxResults: number
+): Promise<{ provider: string; results: SearchResultItem[]; queryUsed: string; errors: string[] }> {
+  const errors: string[] = [];
+  const simplified = simplifyQuery(query);
+  const queries = Array.from(new Set([query, simplified]));
+
+  const providers = isNewsQuery(query)
+    ? [
+        { name: 'Google News RSS fallback', run: searchGoogleNewsRss },
+        { name: 'Bing RSS fallback', run: searchBingRss },
+      ]
+    : [
+        { name: 'Bing RSS fallback', run: searchBingRss },
+        { name: 'Google News RSS fallback', run: searchGoogleNewsRss },
+      ];
+
+  for (const q of queries) {
+    for (const provider of providers) {
+      try {
+        const results = await provider.run(q, maxResults);
+        if (results.length > 0) {
+          return { provider: provider.name, results, queryUsed: q, errors };
+        }
+        errors.push(`${provider.name}: returned 0 results for query "${q}"`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${provider.name}: ${msg}`);
+      }
+    }
+  }
+
+  return {
+    provider: 'Direct search URL fallback',
+    results: buildDirectSearchFallback(query, maxResults),
+    queryUsed: query,
+    errors,
+  };
 }
 
 export const webSearchTool: ToolDefinition = {
@@ -161,67 +250,47 @@ Good for: finding documentation, code examples, recent news, package info.`,
 
     await enforceRateLimit();
 
-    let rawResults;
-    let ddgError: string | null = null;
-    try {
-      rawResults = await search(query, {
-        safeSearch: safeSearch ? SafeSearchType.STRICT : SafeSearchType.OFF,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ddgError = msg;
-    }
+    const ddg = await searchDuckDuckGoWithRetry(query, safeSearch, maxResults);
 
-    if (rawResults && !rawResults.noResults && rawResults.results?.length) {
-      const results = rawResults.results.slice(0, maxResults).map((r, i) => ({
-        rank: i + 1,
-        title: r.title,
-        url: r.url,
-        description: r.description ?? '',
-        hostname: new URL(r.url).hostname,
-      }));
-
+    if (ddg.results.length > 0) {
       return {
         query,
         provider: 'DuckDuckGo (free, no API key)',
-        results,
-        count: results.length,
-        total: rawResults.results.length,
+        results: ddg.results,
+        count: ddg.results.length,
+        total: ddg.results.length,
         tip: 'Use web-fetch on any URL to read full page content.',
       };
     }
 
-    try {
-      const fallback = await fallbackSearch(query, maxResults);
-      if (fallback.results.length > 0) {
-        return {
-          query,
-          provider: fallback.provider,
-          results: fallback.results,
-          count: fallback.results.length,
-          total: fallback.results.length,
-          note: ddgError ? `Primary provider unavailable: ${ddgError}` : undefined,
-          tip: 'Use web-fetch on any URL to read full page content.',
-        };
-      }
-    } catch (fallbackErr: unknown) {
-      const msg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      if (ddgError) {
-        return {
-          error: `Search failed on all providers. DDG: ${ddgError}. Fallback: ${msg}`,
-        };
-      }
+    const fallback = await fallbackSearch(query, maxResults);
 
-      return { error: `Search failed: ${msg}` };
+    if (fallback.results.length > 0) {
+      return {
+        query,
+        provider: fallback.provider,
+        queryUsed: fallback.queryUsed,
+        results: fallback.results,
+        count: fallback.results.length,
+        total: fallback.results.length,
+        diagnostics: fallback.provider === 'Direct search URL fallback' && fallback.errors.length > 0
+          ? fallback.errors.slice(0, 4)
+          : undefined,
+        tip: 'Use web-fetch on any URL to read full page content.',
+      };
     }
 
+    // Never return a hard failure for search: provide usable direct links.
     return {
       query,
-      results: [],
-      count: 0,
-      note: ddgError
-        ? `No results. Primary provider error: ${ddgError}`
-        : 'No results found. Try broader search terms.',
+      provider: 'Direct search URL fallback',
+      results: buildDirectSearchFallback(query, maxResults),
+      count: Math.max(1, Math.min(maxResults, 3)),
+      total: Math.max(1, Math.min(maxResults, 3)),
+      note: ddg.error
+        ? `Returned fallback links because providers were unavailable. Primary provider error: ${ddg.error}`
+        : 'Returned fallback links because providers returned no parseable results.',
+      tip: 'Use web-fetch on any URL to read full page content.',
     };
   },
 };

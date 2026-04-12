@@ -12,7 +12,28 @@ import { loadConfig } from '../../config/settings.js';
 import { applyIncrementalSummarization } from '../../core/compaction.js';
 import { buildSystemPrompt } from '../../core/system-prompt.js';
 import { globalToolRegistry } from '../../tools/registry.js';
-import { SessionManager } from '../../session/manager.js';
+
+type WebSearchResultItem = {
+  title?: string;
+  url?: string;
+  description?: string;
+  hostname?: string;
+};
+
+type WebSearchPayload = {
+  query?: string;
+  provider?: string;
+  results?: WebSearchResultItem[];
+  count?: number;
+};
+
+type WebFetchPayload = {
+  url?: string;
+  title?: string;
+  content?: string;
+  type?: string;
+  error?: string;
+};
 
 export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }) {
   const { exit } = useApp();
@@ -54,6 +75,8 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     setShowSlash(false);
     setInputKey(k => k + 1);
   };
+
+  const nowIso = (): string => new Date().toISOString();
 
   const parseToolCallFromText = (text: string): { name: string; arguments: unknown } | null => {
     const match = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
@@ -148,6 +171,154 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     }
   };
 
+  const tryParseJson = <T,>(text: string): T | null => {
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  const buildSnippetFromContent = (content: string, maxChars: number = 320): string => {
+    const compact = content.replace(/\s+/g, ' ').trim();
+    if (!compact) return 'No readable content extracted.';
+
+    const firstSentences = compact.split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').trim();
+    const chosen = firstSentences.length >= 40 ? firstSentences : compact;
+
+    if (chosen.length <= maxChars) return chosen;
+    return `${chosen.slice(0, maxChars).trim()}...`;
+  };
+
+  const extractUrlsFromSearch = (searchPayload: WebSearchPayload | null, rawText: string): string[] => {
+    const payloadUrls = (searchPayload?.results ?? [])
+      .map(item => item.url)
+      .filter((url): url is string => typeof url === 'string' && /^https?:\/\//i.test(url));
+
+    const textUrls = Array.from(rawText.matchAll(/https?:\/\/[^\s"'<>]+/g)).map(match => match[0]);
+    return Array.from(new Set([...payloadUrls, ...textUrls]));
+  };
+
+  const buildGroundedWebSummary = (
+    query: string,
+    provider: string,
+    docs: Array<{ title: string; url: string; host: string; snippet: string; fetchType: string }>,
+    fallbackResults: WebSearchResultItem[]
+  ): string => {
+    const lines: string[] = [];
+
+    lines.push(`I completed a grounded web run for: "${query}".`);
+    lines.push('');
+    lines.push('What I ran:');
+    lines.push(`1. web-search via ${provider}`);
+
+    if (docs.length > 0) {
+      docs.forEach((doc, idx) => {
+        lines.push(`${idx + 2}. web-fetch ${doc.url}`);
+      });
+
+      lines.push('');
+      lines.push('Grounded summary (from fetched pages only):');
+      docs.forEach((doc) => {
+        lines.push(`- ${doc.title} (${doc.host}, ${doc.fetchType}): ${doc.snippet}`);
+      });
+
+      lines.push('');
+      lines.push('Sources used:');
+      docs.forEach((doc) => {
+        lines.push(`- ${doc.url}`);
+      });
+
+      return lines.join('\n');
+    }
+
+    lines.push('');
+    lines.push('I could not fetch readable article text from the top links, so here are the top search results:');
+    fallbackResults.slice(0, 5).forEach((item) => {
+      const title = item.title || 'Untitled result';
+      const url = item.url || 'Unavailable URL';
+      const desc = item.description || '';
+      lines.push(`- ${title}: ${url}${desc ? ` | ${desc}` : ''}`);
+    });
+
+    return lines.join('\n');
+  };
+
+  const runGroundedWebSearchFlow = async (query: string): Promise<{ toolMessages: SessionMessage[]; assistantMessage: SessionMessage }> => {
+    const toolMessages: SessionMessage[] = [];
+    const searchArgs = { query, maxResults: 8, safeSearch: true };
+    const { normalizedArgs: normalizedSearchArgs, resultText: searchResultText } = await executeToolByName('web-search', searchArgs);
+
+    toolMessages.push({
+      role: 'tool_call',
+      content: '',
+      toolName: 'web-search',
+      toolArgs: normalizedSearchArgs,
+      timestamp: nowIso(),
+    });
+    toolMessages.push({
+      role: 'tool_result',
+      content: `<tool_result>${searchResultText}</tool_result>`,
+      timestamp: nowIso(),
+    });
+
+    const searchPayload = tryParseJson<WebSearchPayload>(searchResultText);
+    const provider = searchPayload?.provider || 'search fallback';
+    const urls = extractUrlsFromSearch(searchPayload, searchResultText).slice(0, 2);
+
+    const docs: Array<{ title: string; url: string; host: string; snippet: string; fetchType: string }> = [];
+    for (const url of urls) {
+      const fetchArgs = { url, maxChars: 8000, timeout: 12000 };
+      const { normalizedArgs: normalizedFetchArgs, resultText: fetchResultText } = await executeToolByName('web-fetch', fetchArgs);
+
+      toolMessages.push({
+        role: 'tool_call',
+        content: '',
+        toolName: 'web-fetch',
+        toolArgs: normalizedFetchArgs,
+        timestamp: nowIso(),
+      });
+      toolMessages.push({
+        role: 'tool_result',
+        content: `<tool_result>${fetchResultText}</tool_result>`,
+        timestamp: nowIso(),
+      });
+
+      const fetchPayload = tryParseJson<WebFetchPayload>(fetchResultText);
+      if (fetchPayload?.error) continue;
+
+      const content = typeof fetchPayload?.content === 'string' ? fetchPayload.content : '';
+      if (content.trim().length < 80) continue;
+
+      const title = fetchPayload?.title || searchPayload?.results?.find(item => item.url === url)?.title || 'Untitled source';
+      const host = (() => {
+        const candidate = fetchPayload?.url || url;
+        try {
+          return new URL(candidate).hostname;
+        } catch {
+          return 'unknown-host';
+        }
+      })();
+
+      docs.push({
+        title,
+        url,
+        host,
+        snippet: buildSnippetFromContent(content),
+        fetchType: fetchPayload?.type || 'content',
+      });
+    }
+
+    return {
+      toolMessages,
+      assistantMessage: {
+        role: 'assistant',
+        content: buildGroundedWebSummary(query, provider, docs, searchPayload?.results ?? []),
+        timestamp: nowIso(),
+      },
+    };
+  };
+
   const handleCommand = async (cmd: string) => {
     clearInput();
     if (cmd === '/exit') {
@@ -176,7 +347,7 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
   const handleSubmit = async (val: string) => {
     if (!val.trim() || isInferencing || showSlash) return;
     if (!engine) {
-      setMessages([...messages, { role: 'system', content: '⏳ Please wait, the engine is still loading...', timestamp: new Date().toISOString() }]);
+      setMessages([...messages, { role: 'system', content: 'Please wait, the engine is still loading...', timestamp: new Date().toISOString() }]);
       clearInput();
       return;
     }
@@ -238,25 +409,10 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
             }
           } else if (shouldForceWebSearch(rootUserInput) && looksLikeToolRefusal(text)) {
             const forcedQuery = extractWebSearchQuery(rootUserInput);
-            const forcedArgs = { query: forcedQuery, maxResults: 8, safeSearch: true };
-            const { normalizedArgs, resultText } = await executeToolByName('web-search', forcedArgs);
-
-            const forcedToolCall: SessionMessage = {
-              role: 'tool_call',
-              content: '',
-              toolName: 'web-search',
-              toolArgs: normalizedArgs,
-              timestamp: new Date().toISOString(),
-            };
-            const forcedToolResult: SessionMessage = {
-              role: 'tool_result',
-              content: `<tool_result>${resultText}</tool_result>`,
-              timestamp: new Date().toISOString(),
-            };
-
-            setMessages(prev => [...prev, forcedToolCall, forcedToolResult]);
+            const { toolMessages, assistantMessage } = await runGroundedWebSearchFlow(forcedQuery);
+            setMessages(prev => [...prev, ...toolMessages, assistantMessage]);
             setCurrentResponse('');
-            await executeInference([...msgs, forcedToolCall, forcedToolResult], rootUserInput, depth + 1);
+            return;
           } else {
             setMessages(prev => [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }]);
             setCurrentResponse('');
@@ -269,24 +425,9 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
 
       if (shouldForceWebSearch(val)) {
         const forcedQuery = extractWebSearchQuery(val);
-        const forcedArgs = { query: forcedQuery, maxResults: 8, safeSearch: true };
-        const { normalizedArgs, resultText } = await executeToolByName('web-search', forcedArgs);
-
-        const forcedToolCall: SessionMessage = {
-          role: 'tool_call',
-          content: '',
-          toolName: 'web-search',
-          toolArgs: normalizedArgs,
-          timestamp: new Date().toISOString(),
-        };
-        const forcedToolResult: SessionMessage = {
-          role: 'tool_result',
-          content: `<tool_result>${resultText}</tool_result>`,
-          timestamp: new Date().toISOString(),
-        };
-
-        setMessages(prev => [...prev, forcedToolCall, forcedToolResult]);
-        await executeInference([...newMessages, forcedToolCall, forcedToolResult], val, 1);
+        const { toolMessages, assistantMessage } = await runGroundedWebSearchFlow(forcedQuery);
+        setMessages(prev => [...prev, ...toolMessages, assistantMessage]);
+        setCurrentResponse('');
       } else {
         await executeInference(newMessages, val, 0);
       }
