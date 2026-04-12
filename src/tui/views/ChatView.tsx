@@ -293,34 +293,51 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     const lines: string[] = [];
     const uniqueHosts = Array.from(new Set(docs.map(doc => doc.host))).filter(Boolean);
 
-    lines.push(`Query requested: ${originalQuery}`);
-    lines.push(`Search focus used: ${normalizedQuery}`);
-    lines.push('');
-    lines.push('Actions completed:');
-    searchRuns.forEach((run, idx) => {
-      lines.push(`${idx + 1}. web-search [${run.aspect}] -> ${run.query} (${run.provider}, results=${run.results.length})`);
-    });
-
     if (docs.length > 0) {
-      const startIndex = searchRuns.length + 1;
-      docs.forEach((doc, idx) => {
-        lines.push(`${startIndex + idx}. web-fetch [${doc.aspect}] -> ${doc.url}`);
-      });
+      const byAspect = new Map<string, Array<{ title: string; snippet: string; url: string; host: string }>>();
+      for (const doc of docs) {
+        const bucket = byAspect.get(doc.aspect) ?? [];
+        bucket.push({ title: doc.title, snippet: doc.snippet, url: doc.url, host: doc.host });
+        byAspect.set(doc.aspect, bucket);
+      }
+
+      lines.push(`Here is what I found for "${originalQuery}".`);
+      lines.push('');
+      lines.push('Answer:');
+
+      for (const [aspect, entries] of byAspect.entries()) {
+        const top = entries.slice(0, 2);
+        const combined = top.map(entry => `${entry.title}: ${entry.snippet}`).join(' ');
+        lines.push(`- ${aspect}: ${combined}`);
+      }
 
       lines.push('');
-      lines.push('Grounded findings (fetched-content only):');
-      docs.forEach((doc, idx) => {
-        lines.push(`${idx + 1}. [${doc.aspect}] ${doc.title} (${doc.host}, ${doc.fetchType}): ${doc.snippet}`);
-      });
+      lines.push('Sources:');
+      const sourceRows = docs.slice(0, 6).map(doc => `- ${doc.url}`);
+      lines.push(...sourceRows);
+      if (uniqueHosts.length > 0) {
+        lines.push('');
+        lines.push(`Covered publishers: ${uniqueHosts.join(', ')}`);
+      }
 
-      lines.push('');
-      lines.push(`Fetched sources used (${uniqueHosts.length}): ${uniqueHosts.join(', ')}`);
       return lines.join('\n');
     }
 
+    const fallbackItems = searchRuns
+      .flatMap(run => run.results.map(result => ({ aspect: run.aspect, title: result.title || 'Untitled result', description: result.description || '', url: result.url || '' })))
+      .filter(item => item.url.length > 0)
+      .slice(0, 8);
+
+    lines.push(`I searched for "${normalizedQuery}" but could not fetch readable full articles from the current sources.`);
     lines.push('');
-    lines.push('No readable article bodies were fetched from the discovered links, so a grounded summary could not be generated for this query.');
-    lines.push('Try a narrower query (for example: "latest Reuters analysis on US Iran talks").');
+    lines.push('Top available findings from search results:');
+    fallbackItems.forEach((item) => {
+      const desc = item.description ? ` - ${item.description}` : '';
+      lines.push(`- ${item.title}${desc}`);
+    });
+    lines.push('');
+    lines.push('Try again with a narrower query (for example: "latest AI model launches this week") to improve full-article fetch quality.');
+
     return lines.join('\n');
   };
 
@@ -541,7 +558,8 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
           } else if (shouldForceWebSearch(rootUserInput) && looksLikeToolRefusal(text)) {
             const forcedQuery = extractWebSearchQuery(rootUserInput);
             const { toolMessages, assistantMessage } = await runGroundedWebSearchFlow(forcedQuery);
-            setMessages(prev => [...prev, ...toolMessages, assistantMessage]);
+            void toolMessages;
+            setMessages(prev => [...prev, assistantMessage]);
             setCurrentResponse('');
             return;
           } else {
@@ -557,7 +575,8 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
       if (shouldForceWebSearch(val)) {
         const forcedQuery = extractWebSearchQuery(val);
         const { toolMessages, assistantMessage } = await runGroundedWebSearchFlow(forcedQuery);
-        setMessages(prev => [...prev, ...toolMessages, assistantMessage]);
+        void toolMessages;
+        setMessages(prev => [...prev, assistantMessage]);
         setCurrentResponse('');
       } else {
         await executeInference(newMessages, val, 0);

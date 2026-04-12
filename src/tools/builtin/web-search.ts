@@ -1,5 +1,6 @@
 import { search, SafeSearchType } from 'duck-duck-scrape';
 import got from 'got';
+import { createRequire } from 'module';
 import { z } from 'zod';
 import type { ToolDefinition, ToolResult } from '../types.js';
 
@@ -22,6 +23,15 @@ const DEFAULT_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (compatible; gemma-cli/1.0; +local)',
   'Accept-Language': 'en-US,en;q=0.9',
 };
+
+const require = createRequire(import.meta.url);
+let googleNewsDecoder: any;
+try {
+  const { GoogleDecoder } = require('google-news-url-decoder');
+  googleNewsDecoder = new GoogleDecoder();
+} catch {
+  googleNewsDecoder = null;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -97,6 +107,45 @@ function getHostname(url: string): string {
   }
 }
 
+function isGoogleNewsArticleUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'news.google.com') return false;
+    return /\/(rss\/)?(articles|read)\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function decodeGoogleNewsUrls(items: SearchResultItem[]): Promise<SearchResultItem[]> {
+  if (!googleNewsDecoder || items.length === 0) return items;
+
+  const decodeTargets = items
+    .map((item, index) => ({ index, url: item.url }))
+    .filter(target => isGoogleNewsArticleUrl(target.url))
+    .slice(0, 8);
+
+  if (decodeTargets.length === 0) return items;
+
+  for (const target of decodeTargets) {
+    try {
+      const decoded = await googleNewsDecoder.decode(target.url);
+      if (!decoded || !decoded.status || typeof decoded.decoded_url !== 'string') continue;
+      if (!/^https?:\/\//i.test(decoded.decoded_url)) continue;
+
+      items[target.index] = {
+        ...items[target.index],
+        url: decoded.decoded_url,
+        hostname: getHostname(decoded.decoded_url),
+      };
+    } catch {
+      // Keep original URL if decode fails.
+    }
+  }
+
+  return items;
+}
+
 function normalizeResults(items: Array<Omit<SearchResultItem, 'rank'>>): SearchResultItem[] {
   return items
     .filter(item => item.url)
@@ -127,7 +176,8 @@ function parseRssResults(xml: string, maxResults: number): SearchResultItem[] {
 async function searchGoogleNewsRss(query: string, maxResults: number): Promise<SearchResultItem[]> {
   const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-US&gl=US&ceid=US:en`;
   const xml = await got(rssUrl, { headers: DEFAULT_HEADERS, timeout: { request: REQUEST_TIMEOUT_MS } }).text();
-  return parseRssResults(xml, maxResults);
+  const parsed = parseRssResults(xml, maxResults);
+  return decodeGoogleNewsUrls(parsed);
 }
 
 async function searchBingRss(query: string, maxResults: number): Promise<SearchResultItem[]> {
