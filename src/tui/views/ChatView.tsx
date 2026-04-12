@@ -55,6 +55,99 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     setInputKey(k => k + 1);
   };
 
+  const parseToolCallFromText = (text: string): { name: string; arguments: unknown } | null => {
+    const match = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
+    if (!match) return null;
+
+    const rawPayload = match[1]
+      .trim()
+      .replace(/^```(?:json)?/i, '')
+      .replace(/```$/i, '')
+      .trim();
+
+    const parsePayload = (payload: string): { name: string; arguments: unknown } | null => {
+      try {
+        const parsed = JSON.parse(payload);
+        if (!parsed || typeof parsed !== 'object') return null;
+        const maybeName = (parsed as any).name;
+        if (typeof maybeName !== 'string' || maybeName.length === 0) return null;
+        return {
+          name: maybeName,
+          arguments: (parsed as any).arguments ?? {},
+        };
+      } catch {
+        return null;
+      }
+    };
+
+    const direct = parsePayload(rawPayload);
+    if (direct) return direct;
+
+    const objectMatch = rawPayload.match(/\{[\s\S]*\}/);
+    if (!objectMatch) return null;
+    return parsePayload(objectMatch[0]);
+  };
+
+  const extractWebSearchQuery = (userText: string): string => {
+    const lowered = userText.toLowerCase();
+    const prefixes = [
+      'search the web for',
+      'search web for',
+      'web search for',
+      'look up',
+      'find online',
+      'get latest news on',
+      'latest news on',
+    ];
+
+    for (const prefix of prefixes) {
+      const idx = lowered.indexOf(prefix);
+      if (idx >= 0) {
+        const after = userText.slice(idx + prefix.length).trim();
+        if (after.length > 0) return after;
+      }
+    }
+
+    if (lowered.includes('latest news')) return 'latest news';
+    return userText.trim();
+  };
+
+  const shouldForceWebSearch = (userText: string): boolean => {
+    return /(search\s+the\s+web|web\s+search|latest\s+news|look\s+up|find\s+online)/i.test(userText);
+  };
+
+  const looksLikeToolRefusal = (assistantText: string): boolean => {
+    return /(cannot access the internet|can't access the internet|do not have access to the internet|limitations prevent me|i am programmed to be a safe and helpful ai assistant)/i.test(assistantText);
+  };
+
+  const executeToolByName = async (toolName: string, rawArgs: unknown): Promise<{ normalizedArgs: unknown; resultText: string }> => {
+    const tool = globalToolRegistry.lookup(toolName);
+    if (!tool) {
+      return {
+        normalizedArgs: rawArgs,
+        resultText: `Error: Tool ${toolName} not found`,
+      };
+    }
+
+    try {
+      const normalizedArgs = tool.parameters ? tool.parameters.parse(rawArgs ?? {}) : rawArgs;
+      const toolResultObj = await tool.execute(normalizedArgs as any);
+
+      const resultText =
+        (typeof toolResultObj.result === 'string' && toolResultObj.result) ||
+        (typeof toolResultObj.stdout === 'string' && toolResultObj.stdout) ||
+        (typeof toolResultObj.error === 'string' && toolResultObj.error) ||
+        JSON.stringify(toolResultObj, null, 2);
+
+      return { normalizedArgs, resultText };
+    } catch (err: any) {
+      return {
+        normalizedArgs: rawArgs,
+        resultText: `Execution failed: ${err?.message ?? String(err)}`,
+      };
+    }
+  };
+
   const handleCommand = async (cmd: string) => {
     clearInput();
     if (cmd === '/exit') {
@@ -96,56 +189,74 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
     setCurrentResponse('');
 
     if (engine) {
-      const executeInference = async (msgs: SessionMessage[]) => {
+      const executeInference = async (msgs: SessionMessage[], rootUserInput: string, depth: number = 0): Promise<void> => {
+        if (depth > 8) {
+          setMessages(prev => [...prev, { role: 'system', content: 'Stopped after too many tool iterations.', timestamp: new Date().toISOString() }]);
+          setCurrentResponse('');
+          return;
+        }
+
         try {
           let text = '';
-          const responseChunks: string[] = [];
-          for await (const chunk of engine.streamChat(msgs, (token) => {   
+          for await (const chunk of engine.streamChat(msgs, (token) => {
             text += token;
             setCurrentResponse(text);
           })) {
-            responseChunks.push(chunk);
+            void chunk;
           }
-          
+
           // Check for tool call
-          const toolCallMatch = text.match(/<tool_call>(.*?)<\/tool_call>/s);
-          if (toolCallMatch) {
-            const toolCallJson = toolCallMatch[1];
+          const toolCall = parseToolCallFromText(text);
+          if (toolCall) {
             try {
-              const toolCallData = JSON.parse(toolCallJson);
-              const toolName = toolCallData.name;
-              const toolArgs = toolCallData.arguments;
-              
+              const toolName = toolCall.name;
+              const toolArgs = toolCall.arguments;
+
               const contentBeforeTool = text.replace(/<tool_call>.*?<\/tool_call>/s, '').trim();
-              const assistantMsg: SessionMessage = { role: 'assistant', content: contentBeforeTool || 'I used a tool here:', timestamp: new Date().toISOString() };
-              const toolCallMsg: SessionMessage = { role: 'tool_call', content: '', toolName, toolArgs, timestamp: new Date().toISOString() };
-              
-              setMessages(prev => [...prev, assistantMsg, { role: 'system', content: `[Running tool] ${toolName}...`, timestamp: new Date().toISOString() }]);
-              setCurrentResponse('');
-              
-              const tool = globalToolRegistry.list().find(t => t.name === toolName);
-              let toolResultString = '';
-              if (tool) {
-                try {
-                  const validatedArgs = tool.parameters ? tool.parameters.parse(toolArgs) : toolArgs;
-                  const toolResultObj = await tool.execute(validatedArgs);
-                  toolResultString = toolResultObj.result || toolResultObj.stdout || toolResultObj.error || JSON.stringify(toolResultObj);
-                } catch (e: any) {
-                  toolResultString = `Execution failed: ${e.message}`;
-                }
-              } else {
-                toolResultString = `Error: Tool ${toolName} not found`;
+              const toolMessages: SessionMessage[] = [];
+
+              if (contentBeforeTool.length > 0) {
+                toolMessages.push({ role: 'assistant', content: contentBeforeTool, timestamp: new Date().toISOString() });
               }
-              
-              const toolResultMsg: SessionMessage = { role: 'tool_result', content: `<tool_result>${toolResultString}</tool_result>`, timestamp: new Date().toISOString() };
-              const nextMsgs: SessionMessage[] = [...msgs, assistantMsg, toolCallMsg, toolResultMsg];
-              setMessages(prev => [...prev.filter(m => !m.content.startsWith('[Running tool]') && m.content !== assistantMsg.content), assistantMsg, toolCallMsg, toolResultMsg]);
-              
-              await executeInference(nextMsgs);
+
+              const { normalizedArgs, resultText } = await executeToolByName(toolName, toolArgs);
+              const toolCallMsg: SessionMessage = { role: 'tool_call', content: '', toolName, toolArgs: normalizedArgs, timestamp: new Date().toISOString() };
+              const toolResultMsg: SessionMessage = {
+                role: 'tool_result',
+                content: `<tool_result>${resultText}</tool_result>`,
+                timestamp: new Date().toISOString(),
+              };
+
+              toolMessages.push(toolCallMsg, toolResultMsg);
+              setMessages(prev => [...prev, ...toolMessages]);
+              setCurrentResponse('');
+
+              await executeInference([...msgs, ...toolMessages], rootUserInput, depth + 1);
             } catch (e: any) {
                setMessages(prev => [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }, { role: 'system', content: `Failed to parse or run tool call: ${e.message}`, timestamp: new Date().toISOString() }]);
                setCurrentResponse('');
             }
+          } else if (shouldForceWebSearch(rootUserInput) && looksLikeToolRefusal(text)) {
+            const forcedQuery = extractWebSearchQuery(rootUserInput);
+            const forcedArgs = { query: forcedQuery, maxResults: 8, safeSearch: true };
+            const { normalizedArgs, resultText } = await executeToolByName('web-search', forcedArgs);
+
+            const forcedToolCall: SessionMessage = {
+              role: 'tool_call',
+              content: '',
+              toolName: 'web-search',
+              toolArgs: normalizedArgs,
+              timestamp: new Date().toISOString(),
+            };
+            const forcedToolResult: SessionMessage = {
+              role: 'tool_result',
+              content: `<tool_result>${resultText}</tool_result>`,
+              timestamp: new Date().toISOString(),
+            };
+
+            setMessages(prev => [...prev, forcedToolCall, forcedToolResult]);
+            setCurrentResponse('');
+            await executeInference([...msgs, forcedToolCall, forcedToolResult], rootUserInput, depth + 1);
           } else {
             setMessages(prev => [...prev, { role: 'assistant', content: text, timestamp: new Date().toISOString() }]);
             setCurrentResponse('');
@@ -156,7 +267,29 @@ export function ChatView({ onNavigate }: { onNavigate?: (dest: string) => void }
         }
       };
 
-      await executeInference(newMessages);
+      if (shouldForceWebSearch(val)) {
+        const forcedQuery = extractWebSearchQuery(val);
+        const forcedArgs = { query: forcedQuery, maxResults: 8, safeSearch: true };
+        const { normalizedArgs, resultText } = await executeToolByName('web-search', forcedArgs);
+
+        const forcedToolCall: SessionMessage = {
+          role: 'tool_call',
+          content: '',
+          toolName: 'web-search',
+          toolArgs: normalizedArgs,
+          timestamp: new Date().toISOString(),
+        };
+        const forcedToolResult: SessionMessage = {
+          role: 'tool_result',
+          content: `<tool_result>${resultText}</tool_result>`,
+          timestamp: new Date().toISOString(),
+        };
+
+        setMessages(prev => [...prev, forcedToolCall, forcedToolResult]);
+        await executeInference([...newMessages, forcedToolCall, forcedToolResult], val, 1);
+      } else {
+        await executeInference(newMessages, val, 0);
+      }
     }
     setIsInferencing(false);
   };
