@@ -2,6 +2,9 @@ import React from 'react';
 import { render } from 'ink';
 import { App } from './tui/App.js';
 import { runDoctor } from './system/requirements.js';
+import { loadLocalEnvFiles } from './utils/env.js';
+
+loadLocalEnvFiles();
 
 export class GemmaApp {
   async chat(): Promise<void> {

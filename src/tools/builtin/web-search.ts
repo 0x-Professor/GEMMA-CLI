@@ -13,11 +13,22 @@ type SearchResultItem = {
   publishedAt?: string;
 };
 
+type TavilyResultItem = {
+  title?: string;
+  url?: string;
+  content?: string;
+};
+
+type TavilySearchResponse = {
+  results?: TavilyResultItem[];
+};
+
 // Rate limiting: DDG bot detection triggers on bursts.
 // Enforce at least 1500ms between searches within a session.
 let lastSearchTime = 0;
 const MIN_SEARCH_INTERVAL_MS = 1500;
 const REQUEST_TIMEOUT_MS = 12000;
+const TAVILY_SEARCH_URL = 'https://api.tavily.com/search';
 
 const DEFAULT_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (compatible; gemma-cli/1.0; +local)',
@@ -104,6 +115,64 @@ function getHostname(url: string): string {
     return new URL(url).hostname;
   } catch {
     return '';
+  }
+}
+
+function getTavilyApiKey(): string | undefined {
+  const value = process.env.TAVILY_API_KEY ?? process.env.TAVILY_SEARCH_API_KEY;
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+async function searchTavily(
+  query: string,
+  maxResults: number,
+): Promise<{ results: SearchResultItem[]; error?: string }> {
+  const apiKey = getTavilyApiKey();
+  if (!apiKey) {
+    return { results: [] };
+  }
+
+  try {
+    const response = await got.post(TAVILY_SEARCH_URL, {
+      headers: {
+        ...DEFAULT_HEADERS,
+        'Content-Type': 'application/json',
+      },
+      timeout: { request: REQUEST_TIMEOUT_MS },
+      json: {
+        api_key: apiKey,
+        query,
+        max_results: Math.max(1, Math.min(maxResults, 25)),
+        search_depth: 'advanced',
+        include_answer: false,
+        include_images: false,
+        include_raw_content: false,
+        topic: isNewsQuery(query) ? 'news' : 'general',
+      },
+    }).json<TavilySearchResponse>();
+
+    const rawItems = Array.isArray(response.results) ? response.results : [];
+
+    const results = normalizeResults(rawItems.map((item) => {
+      const url = typeof item.url === 'string' ? item.url : '';
+      const title = typeof item.title === 'string' && item.title.trim().length > 0
+        ? item.title.trim()
+        : (url || 'Untitled result');
+      const description = typeof item.content === 'string' ? item.content : '';
+
+      return {
+        title,
+        url,
+        description,
+        hostname: getHostname(url),
+      };
+    })).slice(0, maxResults);
+
+    return { results };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [], error: msg };
   }
 }
 
@@ -290,10 +359,10 @@ async function fallbackSearch(
 export const webSearchTool: ToolDefinition = {
   name: 'web-search',
   displayName: 'Web Search',
-  description: `Search the web using DuckDuckGo. Completely free, no API key required.
-Returns organic search results: title, URL, and description snippet.
-Use web-fetch to retrieve the full content of a specific result URL.
-Good for: finding documentation, code examples, recent news, package info.`,
+  description: `Search the web with resilient provider fallback.
+Uses Tavily when TAVILY_API_KEY (or TAVILY_SEARCH_API_KEY) is configured.
+Falls back to DuckDuckGo, then RSS providers, then direct search URLs.
+Use web-fetch to retrieve the full content of a specific result URL.`,
   category: 'web',
   riskLevel: 'low',
 
@@ -309,6 +378,20 @@ Good for: finding documentation, code examples, recent news, package info.`,
   async execute(args): Promise<ToolResult> {
     const { query, maxResults, safeSearch } = args;
     const normalizedQuery = normalizeInputQuery(query);
+
+    const tavily = await searchTavily(normalizedQuery, maxResults);
+
+    if (tavily.results.length > 0) {
+      return {
+        query,
+        queryUsed: normalizedQuery,
+        provider: 'Tavily API',
+        results: tavily.results,
+        count: tavily.results.length,
+        total: tavily.results.length,
+        tip: 'Use web-fetch on any URL to read full page content.',
+      };
+    }
 
     await enforceRateLimit();
 
@@ -351,8 +434,8 @@ Good for: finding documentation, code examples, recent news, package info.`,
       results: buildDirectSearchFallback(normalizedQuery, maxResults),
       count: Math.max(1, Math.min(maxResults, 3)),
       total: Math.max(1, Math.min(maxResults, 3)),
-      note: ddg.error
-        ? `Returned fallback links because providers were unavailable. Primary provider error: ${ddg.error}`
+      note: ddg.error || tavily.error
+        ? `Returned fallback links because providers were unavailable. Primary provider error: ${ddg.error ?? tavily.error}`
         : 'Returned fallback links because providers returned no parseable results.',
       tip: 'Use web-fetch on any URL to read full page content.',
     };
